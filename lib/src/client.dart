@@ -14,7 +14,9 @@ import 'codes/currency.dart';
 import 'config.dart';
 import 'errors.dart';
 import 'models/branch.dart';
+import 'models/pickup.dart';
 import 'models/shipment.dart';
+import 'models/tracking.dart';
 
 part 'response.dart';
 
@@ -522,6 +524,325 @@ class BalikobotClient {
       throw _error(BalikobotError.invalidResponse);
     }
     return (bytes, mediaType!);
+  }
+
+  /// Calls the TRACKSTATUS method for one carrier tracking number.
+  ///
+  /// [carrierId] is the carrier tracking number from ADD. A carrier answer or
+  /// HTTP status 404 means that the carrier has no tracking data yet and
+  /// throws a [BalikobotException] with [BalikobotError.notFound]. An invalid
+  /// [carrier] or [carrierId] throws a [BalikobotException] with
+  /// [BalikobotError.invalidRequest] before any request is sent. The call is
+  /// read-only, so transport failures are safe to retry. [timeout] overrides
+  /// the configured request timeout for this call.
+  Future<TrackStatusResult> trackStatus(
+    Carrier carrier,
+    String carrierId, {
+    Duration? timeout,
+  }) async {
+    if (!carrier.isValid || !_validPackageId(carrierId)) {
+      throw _error(BalikobotError.invalidRequest);
+    }
+    final RestResponse response;
+    try {
+      response = await _sendRequest(
+        'POST',
+        '/${carrier.value}/trackstatus',
+        body: {
+          'carrier_ids': [carrierId],
+        },
+        timeout: timeout,
+      );
+    } on _TransportFailure {
+      throw _error(BalikobotError.unavailable);
+    } on ResponseLimitException {
+      throw _error(BalikobotError.unavailable);
+    }
+    final httpError = _trackHttpStatus(response);
+    if (httpError != null) {
+      throw httpError;
+    }
+    final _TrackStatusResponse payload;
+    try {
+      payload = _trackStatusResponse(_decode(response));
+    } on FormatException {
+      throw _error(BalikobotError.invalidResponse);
+    }
+    final topStatus = payload.status;
+    if (topStatus != null) {
+      switch (topStatus) {
+        case 200:
+          break;
+        case 426:
+        case 503:
+          throw _error(BalikobotError.unavailable);
+        case 404:
+          throw _error(BalikobotError.notFound);
+        default:
+          throw _error(BalikobotError.invalidResponse);
+      }
+    }
+    if (payload.packages.length != 1 ||
+        payload.packages.first.carrierId != carrierId) {
+      throw _error(BalikobotError.invalidResponse);
+    }
+    final entry = payload.packages.first;
+    if (entry.status == null && (topStatus == null || entry.name.isEmpty)) {
+      throw _error(BalikobotError.invalidResponse);
+    }
+    final status = entry.status ?? topStatus;
+    switch (status) {
+      case 200:
+        final id = entry.statusIdV2 ?? entry.statusId;
+        final description = entry.name.isNotEmpty
+            ? entry.name
+            : entry.statusText;
+        if (id == null ||
+            description.isEmpty ||
+            !_validBranchField(description, _branchFieldLimit)) {
+          throw _error(BalikobotError.invalidResponse);
+        }
+        return TrackStatusResult(statusId: id, statusText: description);
+      case 404:
+        throw _error(BalikobotError.notFound);
+      case 426:
+      case 503:
+        throw _error(BalikobotError.unavailable);
+      case 400:
+      case 403:
+      case 405:
+      case 406:
+      case 409:
+      case 413:
+      case 423:
+        throw _error(BalikobotError.rejected);
+      default:
+        throw _error(BalikobotError.invalidResponse);
+    }
+  }
+
+  /// Calls the ORDER method, which hands one package over to the carrier
+  /// batch.
+  ///
+  /// ORDER is idempotent on [packageId]: a repeated closure returns body
+  /// status 208 with the original order id. An invalid [carrier] or
+  /// [packageId] throws a [BalikobotException] with
+  /// [BalikobotError.invalidRequest] before any request is sent. [timeout]
+  /// overrides the configured request timeout for this call.
+  Future<OrderResult> orderBatch(
+    Carrier carrier,
+    String packageId, {
+    Duration? timeout,
+  }) async {
+    if (!carrier.isValid || !_validPackageId(packageId)) {
+      throw _error(BalikobotError.invalidRequest);
+    }
+    final RestResponse response;
+    try {
+      response = await _sendRequest(
+        'POST',
+        '/${carrier.value}/order',
+        body: {
+          'package_ids': [packageId],
+        },
+        timeout: timeout,
+      );
+    } on _TransportFailure catch (failure) {
+      throw _dispatchFailure(failure);
+    } on ResponseLimitException {
+      throw _error(BalikobotError.ambiguous);
+    }
+    final statusCode = response.statusCode;
+    if (statusCode == 429) {
+      throw _transient(response);
+    }
+    if (statusCode >= 500) {
+      throw _error(BalikobotError.unavailable);
+    }
+    if (statusCode != 200 || !_isJson(response)) {
+      if (statusCode >= 200 && statusCode < 300) {
+        throw _error(BalikobotError.ambiguous);
+      }
+      if (statusCode >= 400 && statusCode < 500) {
+        throw _error(BalikobotError.rejected);
+      }
+      throw _error(BalikobotError.invalidResponse);
+    }
+    final _OrderResponse payload;
+    try {
+      payload = _orderResponse(_decode(response));
+    } on FormatException {
+      throw _error(BalikobotError.ambiguous);
+    }
+    final status = payload.status;
+    if (status == null) {
+      throw _error(BalikobotError.ambiguous);
+    }
+    switch (status) {
+      case 200:
+      case 208:
+        if (payload.orderId.isEmpty ||
+            !_validBranchField(payload.orderId, _identifierLimit)) {
+          throw _error(BalikobotError.ambiguous);
+        }
+        return OrderResult(orderId: payload.orderId);
+      case 426:
+      case 503:
+        throw _error(BalikobotError.unavailable);
+      case 400:
+      case 402:
+      case 403:
+      case 404:
+      case 405:
+      case 406:
+      case 409:
+      case 413:
+      case 423:
+        throw _error(BalikobotError.rejected);
+      default:
+        throw _error(BalikobotError.ambiguous);
+    }
+  }
+
+  /// Calls the DROP method for one package that has not entered ORDER.
+  ///
+  /// A body status 404 means that the package is already gone and the call
+  /// succeeds. A body status 405 marks a package that was already handed to
+  /// the batch and throws a [BalikobotException] with
+  /// [BalikobotError.rejected]. An invalid [carrier] or [packageId] throws a
+  /// [BalikobotException] with [BalikobotError.invalidRequest] before any
+  /// request is sent. [timeout] overrides the configured request timeout for
+  /// this call.
+  Future<void> dropPackage(
+    Carrier carrier,
+    String packageId, {
+    Duration? timeout,
+  }) async {
+    if (!carrier.isValid || !_validPackageId(packageId)) {
+      throw _error(BalikobotError.invalidRequest);
+    }
+    final RestResponse response;
+    try {
+      response = await _sendRequest(
+        'POST',
+        '/${carrier.value}/drop',
+        body: {
+          'package_ids': [packageId],
+        },
+        timeout: timeout,
+      );
+    } on _TransportFailure catch (failure) {
+      throw _dispatchFailure(failure);
+    } on ResponseLimitException {
+      throw _error(BalikobotError.ambiguous);
+    }
+    final statusCode = response.statusCode;
+    if (statusCode == 429) {
+      throw _transient(response);
+    }
+    if (statusCode >= 500) {
+      throw _error(BalikobotError.unavailable);
+    }
+    if (statusCode != 200 || !_isJson(response)) {
+      if (statusCode >= 200 && statusCode < 300) {
+        throw _error(BalikobotError.ambiguous);
+      }
+      if (statusCode >= 400 && statusCode < 500) {
+        throw _error(BalikobotError.rejected);
+      }
+      throw _error(BalikobotError.invalidResponse);
+    }
+    final _DropResponse payload;
+    try {
+      payload = _dropResponse(_decode(response));
+    } on FormatException {
+      throw _error(BalikobotError.ambiguous);
+    }
+    final status = payload.status;
+    if (status == null) {
+      throw _error(BalikobotError.ambiguous);
+    }
+    switch (status) {
+      case 200:
+      case 404:
+        return;
+      case 426:
+      case 503:
+        throw _error(BalikobotError.unavailable);
+      case 400:
+      case 402:
+      case 403:
+      case 405:
+      case 406:
+      case 409:
+      case 413:
+      case 423:
+        throw _error(BalikobotError.rejected);
+      default:
+        throw _error(BalikobotError.ambiguous);
+    }
+  }
+
+  /// Calls the ORDERPICKUP method and books one physical collection.
+  ///
+  /// The supported [carrier] values are DPD, DPDCZ and PPL. DPD and DPDCZ take
+  /// the collection address from the carrier configuration and always report
+  /// a confirmed booking; PPL additionally requires a provider confirmation
+  /// and pickup reference. An invalid [request] or an unsupported [carrier]
+  /// throws a [BalikobotException] with [BalikobotError.rejected] before any
+  /// request is sent. [timeout] overrides the configured request timeout for
+  /// this call.
+  Future<PickupResult> orderPickup(
+    Carrier carrier,
+    PickupRequest request, {
+    Duration? timeout,
+  }) async {
+    if (!_validPickupRequest(carrier, request)) {
+      throw _error(BalikobotError.rejected);
+    }
+    final RestResponse response;
+    try {
+      response = await _sendRequest(
+        'POST',
+        '/${carrier.value}/orderpickup',
+        body: _pickupBody(carrier, request),
+        timeout: timeout,
+      );
+    } on _TransportFailure {
+      throw _error(BalikobotError.ambiguous);
+    } on ResponseLimitException {
+      throw _error(BalikobotError.ambiguous);
+    }
+    if (response.statusCode != 200) {
+      throw _pickupStatusError(response.statusCode);
+    }
+    if (!_isJson(response)) {
+      throw _error(BalikobotError.ambiguous);
+    }
+    final _PickupResponse payload;
+    try {
+      payload = _pickupResponse(_decode(response));
+    } on FormatException {
+      throw _error(BalikobotError.ambiguous);
+    }
+    final status = payload.status;
+    if (status == null) {
+      throw _error(BalikobotError.ambiguous);
+    }
+    if (status != 200) {
+      throw _pickupStatusError(status);
+    }
+    if (carrier != Carrier.ppl) {
+      return const PickupResult(confirmed: true);
+    }
+    final providerId = payload.providerId;
+    final confirmed = payload.confirmed;
+    if (confirmed == null ||
+        providerId.isEmpty ||
+        !_validBranchField(providerId, _identifierLimit)) {
+      throw _error(BalikobotError.ambiguous);
+    }
+    return PickupResult(providerId: providerId, confirmed: confirmed);
   }
 }
 

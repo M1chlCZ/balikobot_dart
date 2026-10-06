@@ -220,6 +220,62 @@ String _packageId(Object? raw) {
   return text;
 }
 
+bool _validPickupRequest(Carrier carrier, PickupRequest request) {
+  if (carrier != Carrier.dpdcz &&
+      carrier != Carrier.dpd &&
+      carrier != Carrier.ppl) {
+    return false;
+  }
+  final match = _pickupDatePattern.firstMatch(request.date);
+  if (match == null) {
+    return false;
+  }
+  final year = int.parse(match.group(1)!);
+  final month = int.parse(match.group(2)!);
+  final day = int.parse(match.group(3)!);
+  final date = DateTime.utc(year, month, day);
+  if (date.year != year || date.month != month || date.day != day) {
+    return false;
+  }
+  return request.packageCount >= 1 &&
+      request.packageCount <= _pickupPackageLimit &&
+      request.weightKg > 0 &&
+      request.weightKg <= _pickupWeightLimit &&
+      !request.weightKg.isNaN &&
+      _validBranchField(request.note, _pickupNoteLimit);
+}
+
+Map<String, Object> _pickupBody(Carrier carrier, PickupRequest request) {
+  final body = <String, Object>{'date': request.date};
+  var noteField = 'note';
+  if (carrier != Carrier.ppl) {
+    body['weight'] = request.weightKg;
+    body['package_count'] = request.packageCount;
+    noteField = 'message';
+  }
+  if (request.note.isNotEmpty) {
+    body[noteField] = request.note;
+  }
+  return body;
+}
+
+BalikobotException _pickupStatusError(int status) {
+  switch (status) {
+    case 400:
+    case 401:
+    case 403:
+    case 404:
+    case 405:
+    case 413:
+    case 415:
+    case 422:
+    case 429:
+      return _error(BalikobotError.rejected);
+    default:
+      return _error(BalikobotError.ambiguous);
+  }
+}
+
 class _AddPackageStatus {
   const _AddPackageStatus({
     required this.eid,
@@ -283,6 +339,56 @@ class _OrderViewResponse {
   final String orderId;
   final List<String> packageIds;
   final String labelsUrl;
+}
+
+class _TrackStatusResponse {
+  const _TrackStatusResponse({required this.status, required this.packages});
+
+  final int? status;
+  final List<_TrackStatusPackage> packages;
+}
+
+class _TrackStatusPackage {
+  const _TrackStatusPackage({
+    required this.carrierId,
+    required this.statusId,
+    required this.statusIdV2,
+    required this.name,
+    required this.statusText,
+    required this.status,
+  });
+
+  final String carrierId;
+  final String? statusId;
+  final String? statusIdV2;
+  final String name;
+  final String statusText;
+  final int? status;
+}
+
+class _OrderResponse {
+  const _OrderResponse({required this.status, required this.orderId});
+
+  final int? status;
+  final String orderId;
+}
+
+class _DropResponse {
+  const _DropResponse({required this.status});
+
+  final int? status;
+}
+
+class _PickupResponse {
+  const _PickupResponse({
+    required this.status,
+    required this.providerId,
+    required this.confirmed,
+  });
+
+  final int? status;
+  final String providerId;
+  final bool? confirmed;
 }
 
 _AddResponse _addResponse(Object? raw) {
@@ -386,6 +492,87 @@ List<String> _packageIdList(Object? raw) {
   return [for (final entry in raw) _packageId(entry)];
 }
 
+_TrackStatusResponse _trackStatusResponse(Object? raw) {
+  if (raw is! Map<String, dynamic>) {
+    throw const FormatException('invalid Balíkobot track status response');
+  }
+  return _TrackStatusResponse(
+    status: _wireStatus(raw),
+    packages: _trackStatusPackages(raw['packages']),
+  );
+}
+
+_TrackStatusPackage _trackStatusPackage(Object? raw) {
+  if (raw is! Map<String, dynamic>) {
+    throw const FormatException('invalid Balíkobot track status package');
+  }
+  return _TrackStatusPackage(
+    carrierId: _wireString(raw['carrier_id']),
+    statusId: raw.containsKey('status_id')
+        ? _trackStatusId(raw['status_id'])
+        : null,
+    statusIdV2: raw.containsKey('status_id_v2')
+        ? _trackStatusId(raw['status_id_v2'])
+        : null,
+    name: _wireString(raw['name']),
+    statusText: _wireString(raw['status_text']),
+    status: _wireStatus(raw),
+  );
+}
+
+List<_TrackStatusPackage> _trackStatusPackages(Object? raw) {
+  if (raw == null) {
+    return const [];
+  }
+  if (raw is! List) {
+    throw const FormatException('invalid Balíkobot track status packages');
+  }
+  return [for (final entry in raw) _trackStatusPackage(entry)];
+}
+
+String _trackStatusId(Object? raw) {
+  final String text;
+  if (raw is int) {
+    text = raw.toString();
+  } else if (raw is double) {
+    text = raw.toString();
+  } else {
+    throw const FormatException('invalid Balíkobot track status id');
+  }
+  if (!_trackStatusPattern.hasMatch(text)) {
+    throw const FormatException('invalid Balíkobot track status id');
+  }
+  return text;
+}
+
+_OrderResponse _orderResponse(Object? raw) {
+  if (raw is! Map<String, dynamic>) {
+    throw const FormatException('invalid Balíkobot order response');
+  }
+  return _OrderResponse(
+    status: _wireStatus(raw),
+    orderId: _wireString(raw['order_id']),
+  );
+}
+
+_DropResponse _dropResponse(Object? raw) {
+  if (raw is! Map<String, dynamic>) {
+    throw const FormatException('invalid Balíkobot drop response');
+  }
+  return _DropResponse(status: _wireStatus(raw));
+}
+
+_PickupResponse _pickupResponse(Object? raw) {
+  if (raw is! Map<String, dynamic>) {
+    throw const FormatException('invalid Balíkobot pickup response');
+  }
+  return _PickupResponse(
+    status: _wireStatus(raw),
+    providerId: _wireString(raw['pickup_order_id']),
+    confirmed: _wireBool(raw['confirmed']),
+  );
+}
+
 int? _wireStatus(Map<String, dynamic> raw) =>
     raw.containsKey('status') ? _responseStatus(raw['status']) : null;
 
@@ -427,6 +614,26 @@ BalikobotException? _labelLookupStatus(RestResponse response) {
   if (statusCode != 200 || !_isJson(response)) {
     if (statusCode >= 400 && statusCode < 500) {
       return _error(BalikobotError.rejected);
+    }
+    return _error(BalikobotError.invalidResponse);
+  }
+  return null;
+}
+
+BalikobotException? _trackHttpStatus(RestResponse response) {
+  final statusCode = response.statusCode;
+  if (statusCode == 429) {
+    return _transient(response);
+  }
+  if (statusCode >= 500) {
+    return _error(BalikobotError.unavailable);
+  }
+  if (statusCode == 404) {
+    return _error(BalikobotError.notFound);
+  }
+  if (statusCode != 200 || !_isJson(response)) {
+    if (statusCode >= 400 && statusCode < 500) {
+      return _error(BalikobotError.unavailable);
     }
     return _error(BalikobotError.invalidResponse);
   }
@@ -607,6 +814,16 @@ String _wireString(Object? raw) {
   throw const FormatException('invalid Balíkobot branch field');
 }
 
+bool? _wireBool(Object? raw) {
+  if (raw == null) {
+    return null;
+  }
+  if (raw is bool) {
+    return raw;
+  }
+  throw const FormatException('invalid Balíkobot boolean field');
+}
+
 String? _branchId(Object? raw) {
   if (raw == null) {
     return null;
@@ -719,6 +936,9 @@ const int _addFieldLimit = 255;
 const int _identifierLimit = 100;
 const int _labelResponseLimit = 4 << 20;
 const int _trackReferenceModulus = 10000000000;
+const int _pickupPackageLimit = 10000;
+const int _pickupWeightLimit = 100000;
+const int _pickupNoteLimit = 255;
 const String _pdfMediaType = 'application/pdf';
 const String _zplMediaType = 'application/zpl';
 const String _pdfMagicPrefix = '%PDF-';
@@ -727,3 +947,5 @@ final RegExp _servicePattern = RegExp(r'^[A-Za-z0-9]{1,16}$');
 final RegExp _branchIdPattern = RegExp(r'^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$');
 final RegExp _eidPattern = RegExp(r'^[A-Za-z0-9-]{8,40}$');
 final RegExp _statusPattern = RegExp(r'^[0-9]{1,3}$');
+final RegExp _trackStatusPattern = RegExp(r'^-?[0-9]{1,3}(\.[0-9]{1,2})?$');
+final RegExp _pickupDatePattern = RegExp(r'^(\d{4})-(\d{2})-(\d{2})$');
