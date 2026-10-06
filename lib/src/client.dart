@@ -14,6 +14,7 @@ import 'codes/currency.dart';
 import 'config.dart';
 import 'errors.dart';
 import 'models/branch.dart';
+import 'models/capabilities.dart' as capabilities;
 import 'models/pickup.dart';
 import 'models/shipment.dart';
 import 'models/tracking.dart';
@@ -49,6 +50,7 @@ class BalikobotClient {
     }
     final (baseUrl, origin, loopback) = _validateBaseUrl(config.baseUrl);
     _labelHosts = _normalizeLabelHosts(config.labelHosts);
+    _liveAccount = config.liveAccount;
     _origin = origin;
     _loopback = loopback;
     final timeout = config.timeout == Duration.zero
@@ -84,6 +86,9 @@ class BalikobotClient {
   late final List<String> _labelHosts;
   late final String _origin;
   late final bool _loopback;
+  late final bool? _liveAccount;
+  DateTime? _accountVerifiedAt;
+  Future<_WhoAmIWire>? _accountCheckInFlight;
   bool _closed = false;
 
   /// The wrapped HTTP client used for every request.
@@ -808,6 +813,8 @@ class BalikobotClient {
         body: _pickupBody(carrier, request),
         timeout: timeout,
       );
+    } on _AccountUnverified {
+      throw _error(BalikobotError.rejected);
     } on _TransportFailure {
       throw _error(BalikobotError.ambiguous);
     } on ResponseLimitException {
@@ -843,6 +850,300 @@ class BalikobotClient {
       throw _error(BalikobotError.ambiguous);
     }
     return PickupResult(providerId: providerId, confirmed: confirmed);
+  }
+
+  /// Calls the WHOAMI method and returns the account information.
+  ///
+  /// The returned carrier list contains every carrier contracted by the
+  /// account. [timeout] overrides the configured request timeout for this
+  /// call.
+  Future<capabilities.WhoAmI> whoAmI({Duration? timeout}) async {
+    final wire = _WhoAmIWire();
+    await _capabilityGET('/info/whoami', wire, false, timeout: timeout);
+    return capabilities.WhoAmI(
+      status: wire.status!,
+      liveAccount: wire.liveAccount,
+      carriers: [
+        for (final entry in wire.carriers)
+          capabilities.WhoAmICarrier(
+            slug: Carrier(entry.slug),
+            name: entry.name,
+          ),
+      ],
+    );
+  }
+
+  /// Calls the ACTIVATEDSERVICES method of [carrier] and returns the
+  /// normalized activated services.
+  ///
+  /// When the provider reports that parcel shipping is inactive, the service
+  /// list is empty. An invalid [carrier] throws a [BalikobotException] with
+  /// [BalikobotError.invalidRequest] before any request is sent. [timeout]
+  /// overrides the configured request timeout for this call.
+  Future<capabilities.ActivatedServices> activatedServices(
+    Carrier carrier, {
+    Duration? timeout,
+  }) async {
+    if (!carrier.isValid) {
+      throw _error(BalikobotError.invalidRequest);
+    }
+    final wire = _ActivatedServicesCapabilityResponse();
+    await _capabilityGET(
+      '/${carrier.value}/activatedservices',
+      wire,
+      false,
+      timeout: timeout,
+    );
+    try {
+      final (services, _) = _normalizeActivatedServices(wire);
+      return capabilities.ActivatedServices(
+        activeParcel: wire.activeParcel,
+        services: services,
+      );
+    } on FormatException {
+      throw _error(BalikobotError.invalidResponse);
+    }
+  }
+
+  /// Calls the COUNTRIES4SERVICE method of [carrier] and returns the supported
+  /// destination countries per service.
+  ///
+  /// Every country sent by the provider is kept, with surrounding whitespace
+  /// trimmed and letters upper-cased. An invalid [carrier] throws a
+  /// [BalikobotException] with [BalikobotError.invalidRequest] before any
+  /// request is sent. [timeout] overrides the configured request timeout for
+  /// this call.
+  Future<List<capabilities.ServiceCountries>> countries(
+    Carrier carrier, {
+    Duration? timeout,
+  }) async {
+    if (!carrier.isValid) {
+      throw _error(BalikobotError.invalidRequest);
+    }
+    final wire = _CountriesCapabilityResponse();
+    await _capabilityGET(
+      '/${carrier.value}/countries4service',
+      wire,
+      false,
+      timeout: timeout,
+    );
+    if (wire.serviceTypes.length > _capabilityServiceLimit) {
+      throw _error(BalikobotError.invalidResponse);
+    }
+    final result = <capabilities.ServiceCountries>[];
+    for (final entry in wire.serviceTypes) {
+      final code = entry.code;
+      if (code == null) {
+        throw _error(BalikobotError.invalidResponse);
+      }
+      final serviceType = code.trim();
+      if (!_validCapabilityServiceCode(serviceType) ||
+          entry.countries.length > _capabilityServiceLimit) {
+        throw _error(BalikobotError.invalidResponse);
+      }
+      result.add(
+        capabilities.ServiceCountries(
+          serviceType: serviceType,
+          countries: [
+            for (final rawCountry in entry.countries)
+              Country(rawCountry.trim().toUpperCase()),
+          ],
+        ),
+      );
+    }
+    return result;
+  }
+
+  /// Calls the COD4SERVICES method of [carrier] and returns the normalized
+  /// cash-on-delivery destinations per service.
+  ///
+  /// A carrier without the optional dictionary returns an empty list. An
+  /// invalid [carrier] throws a [BalikobotException] with
+  /// [BalikobotError.invalidRequest] before any request is sent. [timeout]
+  /// overrides the configured request timeout for this call.
+  Future<List<capabilities.ServiceCOD>> cod(
+    Carrier carrier, {
+    Duration? timeout,
+  }) async {
+    if (!carrier.isValid) {
+      throw _error(BalikobotError.invalidRequest);
+    }
+    final wire = _CodCapabilityResponse();
+    await _capabilityGET(
+      '/${carrier.value}/cod4services',
+      wire,
+      true,
+      timeout: timeout,
+    );
+    if (wire.serviceTypes.length > _capabilityServiceLimit) {
+      throw _error(BalikobotError.invalidResponse);
+    }
+    final result = <capabilities.ServiceCOD>[];
+    for (final entry in wire.serviceTypes) {
+      final code = entry.code;
+      if (code == null) {
+        throw _error(BalikobotError.invalidResponse);
+      }
+      final serviceType = code.trim();
+      if (!_validCapabilityServiceCode(serviceType) ||
+          entry.countries.length > _capabilityServiceLimit) {
+        throw _error(BalikobotError.invalidResponse);
+      }
+      try {
+        result.add(
+          capabilities.ServiceCOD(
+            serviceType: serviceType,
+            countries: _normalizeCODCountries(entry.countries),
+          ),
+        );
+      } on FormatException {
+        throw _error(BalikobotError.invalidResponse);
+      }
+    }
+    return result;
+  }
+
+  /// Discovers the contracted carriers and their activated services in one
+  /// run.
+  ///
+  /// Without [scope] the call discovers every carrier of the account; an
+  /// explicit empty scope discovers none. Every requested carrier must belong
+  /// to the account, otherwise the call throws a [BalikobotException] with
+  /// [BalikobotError.invalidResponse]. The returned destinations are
+  /// restricted to EU countries, matching the reference integration. [timeout]
+  /// overrides the configured request timeout for this call.
+  Future<List<capabilities.Carrier>> carrierCapabilities({
+    List<Carrier>? scope,
+    Duration? timeout,
+  }) async {
+    final whoami = await _verifiedWhoAmI(allowCached: false);
+    final List<capabilities.Carrier> carriers;
+    try {
+      carriers = _scopedCapabilityCarriers(whoami.carriers, scope);
+    } on FormatException {
+      throw _error(BalikobotError.invalidResponse);
+    }
+    final result = <capabilities.Carrier>[];
+    for (final carrier in carriers) {
+      final carrierCode = carrier.carrierCode;
+      final activated = _ActivatedServicesCapabilityResponse();
+      final countries = _CountriesCapabilityResponse();
+      await _capabilityGET(
+        '/${carrierCode.value}/activatedservices',
+        activated,
+        false,
+        timeout: timeout,
+      );
+      await _capabilityGET(
+        '/${carrierCode.value}/countries4service',
+        countries,
+        false,
+        timeout: timeout,
+      );
+      try {
+        result.add(
+          capabilities.Carrier(
+            carrierCode: carrierCode,
+            services: _normalizeCapabilities(
+              activated,
+              countries,
+              _CodCapabilityResponse(),
+            ),
+          ),
+        );
+      } on FormatException {
+        throw _error(BalikobotError.invalidResponse);
+      }
+    }
+    return result;
+  }
+
+  Future<void> _capabilityGET(
+    String path,
+    _CapabilityStatusResponse target,
+    bool allowUnsupported, {
+    Duration? timeout,
+  }) async {
+    final RestResponse response;
+    try {
+      response = await _sendRequest('GET', path, timeout: timeout);
+    } on _TransportFailure {
+      throw _error(BalikobotError.unavailable);
+    } on ResponseLimitException {
+      throw _error(BalikobotError.unavailable);
+    }
+    final statusCode = response.statusCode;
+    if (allowUnsupported && statusCode == 501) {
+      return;
+    }
+    if (statusCode == 429 || statusCode >= 500) {
+      throw _error(BalikobotError.unavailable);
+    }
+    if (statusCode != 200 || !_isJson(response)) {
+      throw _error(BalikobotError.invalidResponse);
+    }
+    try {
+      target.decodeFrom(_decode(response));
+    } on FormatException {
+      throw _error(BalikobotError.invalidResponse);
+    }
+    final status = target.status;
+    if (status == 200 || (allowUnsupported && status == 501)) {
+      return;
+    }
+    throw _error(BalikobotError.invalidResponse);
+  }
+
+  bool get _accountIsFresh {
+    final verifiedAt = _accountVerifiedAt;
+    if (verifiedAt == null) {
+      return false;
+    }
+    final age = DateTime.now().difference(verifiedAt);
+    return !age.isNegative && age < _accountModeTtl;
+  }
+
+  Future<void> _verifyWriteAllowed() async {
+    try {
+      await _verifiedWhoAmI(allowCached: true);
+    } catch (_) {
+      throw const _AccountUnverified();
+    }
+  }
+
+  Future<_WhoAmIWire> _verifiedWhoAmI({required bool allowCached}) async {
+    if (allowCached && _liveAccount == null) {
+      return _WhoAmIWire();
+    }
+    if (allowCached && _accountIsFresh) {
+      return _WhoAmIWire();
+    }
+    final inFlight = _accountCheckInFlight;
+    if (inFlight != null) {
+      return inFlight;
+    }
+    final check = _runAccountCheck();
+    _accountCheckInFlight = check;
+    try {
+      return await check;
+    } finally {
+      _accountCheckInFlight = null;
+    }
+  }
+
+  Future<_WhoAmIWire> _runAccountCheck() async {
+    _accountVerifiedAt = null;
+    final wire = _WhoAmIWire();
+    await _capabilityGET('/info/whoami', wire, false);
+    final expected = _liveAccount;
+    if (expected != null) {
+      final live = wire.liveAccount;
+      if (live == null || live != expected) {
+        throw _error(BalikobotError.invalidResponse);
+      }
+      _accountVerifiedAt = DateTime.now();
+    }
+    return wire;
   }
 }
 
@@ -975,6 +1276,7 @@ class _EmptyTokenStore implements TokenStore {
 
 const String _defaultBaseUrl = 'https://apiv2.balikobot.cz';
 const Duration _defaultTimeout = Duration(seconds: 30);
+const Duration _accountModeTtl = Duration(minutes: 5);
 const int _defaultMaxResponseBytes = 8 << 20;
 const String _userAgent = 'balikobot_dart/0.1.0';
 const int _userLimit = 100;

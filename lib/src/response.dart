@@ -7,6 +7,9 @@ extension on BalikobotClient {
     Object? body,
     Duration? timeout,
   }) async {
+    if (method != 'GET') {
+      await _verifyWriteAllowed();
+    }
     try {
       return await _rest.sendRaw(
         method,
@@ -125,6 +128,9 @@ BalikobotException _transient(RestResponse response) =>
     _error(BalikobotError.unavailable, '', _retryAfter(response));
 
 BalikobotException _dispatchFailure(_TransportFailure failure) {
+  if (failure is _AccountUnverified) {
+    return _error(BalikobotError.unavailable);
+  }
   final cause = failure.cause;
   if (cause is RequestTimeoutException) {
     return _error(BalikobotError.ambiguous);
@@ -143,6 +149,10 @@ class _TransportFailure implements Exception {
   const _TransportFailure(this.cause);
 
   final Object cause;
+}
+
+class _AccountUnverified extends _TransportFailure {
+  const _AccountUnverified() : super('account mode is not verified');
 }
 
 bool _validAddPackage(AddPackageRequest request) {
@@ -930,6 +940,637 @@ bool _validUtf8(String value) {
   return true;
 }
 
+abstract interface class _CapabilityStatusResponse {
+  int? get status;
+
+  void decodeFrom(Object? raw);
+}
+
+class _WhoAmIWire implements _CapabilityStatusResponse {
+  @override
+  int? status;
+  bool? liveAccount;
+  List<_CapabilityCarrierWire> carriers = const [];
+
+  @override
+  void decodeFrom(Object? raw) {
+    if (raw is! Map<String, dynamic>) {
+      throw const FormatException('invalid Balíkobot whoami response');
+    }
+    status = _wireStatus(raw);
+    liveAccount = _wireBool(raw['live_account']);
+    carriers = _capabilityCarrierList(raw['carriers']);
+  }
+}
+
+class _CapabilityCarrierWire {
+  const _CapabilityCarrierWire({required this.slug, required this.name});
+
+  final String slug;
+  final String name;
+}
+
+List<_CapabilityCarrierWire> _capabilityCarrierList(Object? raw) {
+  if (raw == null) {
+    return const [];
+  }
+  if (raw is! List) {
+    throw const FormatException('invalid Balíkobot capability carriers');
+  }
+  return [for (final entry in raw) _capabilityCarrier(entry)];
+}
+
+_CapabilityCarrierWire _capabilityCarrier(Object? raw) {
+  if (raw == null) {
+    return const _CapabilityCarrierWire(slug: '', name: '');
+  }
+  if (raw is! Map<String, dynamic>) {
+    throw const FormatException('invalid Balíkobot capability carrier');
+  }
+  return _CapabilityCarrierWire(
+    slug: _wireString(raw['slug']),
+    name: _wireString(raw['name']),
+  );
+}
+
+class _ActivatedServicesCapabilityResponse
+    implements _CapabilityStatusResponse {
+  @override
+  int? status;
+  bool? activeParcel;
+  List<_ActivatedServiceWire> serviceTypes = const [];
+
+  @override
+  void decodeFrom(Object? raw) {
+    if (raw is! Map<String, dynamic>) {
+      throw const FormatException('invalid Balíkobot activated services');
+    }
+    status = _wireStatus(raw);
+    activeParcel = _wireBool(raw['active_parcel']);
+    serviceTypes = _activatedServiceList(raw['service_types']);
+  }
+}
+
+class _ActivatedServiceWire {
+  const _ActivatedServiceWire({
+    this.code,
+    required this.name,
+    this.homeDelivery,
+    this.boxDelivery,
+    this.pickupPointsDelivery,
+  });
+
+  final String? code;
+  final String name;
+  final bool? homeDelivery;
+  final bool? boxDelivery;
+  final bool? pickupPointsDelivery;
+}
+
+List<_ActivatedServiceWire> _activatedServiceList(Object? raw) {
+  if (raw == null) {
+    return const [];
+  }
+  if (raw is! List) {
+    throw const FormatException('invalid Balíkobot activated services');
+  }
+  return [for (final entry in raw) _activatedService(entry)];
+}
+
+_ActivatedServiceWire _activatedService(Object? raw) {
+  if (raw is! Map<String, dynamic>) {
+    throw const FormatException('invalid Balíkobot activated service');
+  }
+  return _ActivatedServiceWire(
+    code: raw.containsKey('service_type')
+        ? _serviceCode(raw['service_type'])
+        : null,
+    name: _wireString(raw['name']),
+    homeDelivery: _wireBool(raw['home_delivery']),
+    boxDelivery: _wireBool(raw['box_delivery']),
+    pickupPointsDelivery: _wireBool(raw['pickup_points_delivery']),
+  );
+}
+
+class _CountriesCapabilityResponse implements _CapabilityStatusResponse {
+  @override
+  int? status;
+  List<_CountriesServiceWire> serviceTypes = const [];
+
+  @override
+  void decodeFrom(Object? raw) {
+    if (raw is! Map<String, dynamic>) {
+      throw const FormatException('invalid Balíkobot countries response');
+    }
+    status = _wireStatus(raw);
+    serviceTypes = _decodeCountriesServices(raw['service_types']);
+  }
+}
+
+class _CountriesServiceWire {
+  const _CountriesServiceWire({this.code, required this.countries});
+
+  final String? code;
+  final List<String> countries;
+}
+
+List<_CountriesServiceWire> _decodeCountriesServices(Object? raw) {
+  if (raw == null) {
+    return const [];
+  }
+  if (raw is List) {
+    return [for (final entry in raw) _countriesService(entry)];
+  }
+  if (raw is! Map<String, dynamic> || raw.length > _capabilityServiceLimit) {
+    throw const FormatException('invalid Balíkobot countries services');
+  }
+  final keys = raw.keys.toList();
+  for (final key in keys) {
+    if (!_capabilityKeyPattern.hasMatch(key)) {
+      throw const FormatException('invalid Balíkobot countries services');
+    }
+  }
+  keys.sort();
+  return [for (final key in keys) _countriesService(raw[key])];
+}
+
+_CountriesServiceWire _countriesService(Object? raw) {
+  if (raw is! Map<String, dynamic>) {
+    throw const FormatException('invalid Balíkobot countries service');
+  }
+  return _CountriesServiceWire(
+    code: raw.containsKey('service_type')
+        ? _serviceCode(raw['service_type'])
+        : null,
+    countries: _wireStrings(raw['countries']),
+  );
+}
+
+class _CodCapabilityResponse implements _CapabilityStatusResponse {
+  @override
+  int? status;
+  List<_CodServiceWire> serviceTypes = const [];
+
+  @override
+  void decodeFrom(Object? raw) {
+    if (raw is! Map<String, dynamic>) {
+      throw const FormatException('invalid Balíkobot cod response');
+    }
+    status = _wireStatus(raw);
+    serviceTypes = _codServiceList(raw['service_types']);
+  }
+}
+
+class _CodServiceWire {
+  const _CodServiceWire({this.code, required this.countries});
+
+  final String? code;
+  final List<_CodCountryWire> countries;
+}
+
+class _CodCountryWire {
+  const _CodCountryWire({
+    required this.country,
+    required this.currency,
+    required this.maxPrice,
+  });
+
+  final String country;
+  final String currency;
+  final Object? maxPrice;
+}
+
+List<_CodServiceWire> _codServiceList(Object? raw) {
+  if (raw == null) {
+    return const [];
+  }
+  if (raw is! List) {
+    throw const FormatException('invalid Balíkobot cod services');
+  }
+  return [for (final entry in raw) _codService(entry)];
+}
+
+_CodServiceWire _codService(Object? raw) {
+  if (raw is! Map<String, dynamic>) {
+    throw const FormatException('invalid Balíkobot cod service');
+  }
+  return _CodServiceWire(
+    code: raw.containsKey('service_type')
+        ? _serviceCode(raw['service_type'])
+        : null,
+    countries: _codCountryList(raw['countries']),
+  );
+}
+
+List<_CodCountryWire> _codCountryList(Object? raw) {
+  if (raw == null) {
+    return const [];
+  }
+  if (raw is! List) {
+    throw const FormatException('invalid Balíkobot cod countries');
+  }
+  return [for (final entry in raw) _codCountry(entry)];
+}
+
+_CodCountryWire _codCountry(Object? raw) {
+  if (raw is! Map<String, dynamic>) {
+    throw const FormatException('invalid Balíkobot cod country');
+  }
+  return _CodCountryWire(
+    country: _wireString(raw['country']),
+    currency: _wireString(raw['currency']),
+    maxPrice: raw['max_price'],
+  );
+}
+
+String _serviceCode(Object? raw) {
+  final String text;
+  if (raw is String) {
+    text = raw;
+  } else if (raw is int) {
+    text = raw.toString();
+  } else {
+    throw const FormatException('invalid Balíkobot service code');
+  }
+  if (!_validUtf8(text) ||
+      text.isEmpty ||
+      utf8.encode(text).length > _capabilityServiceCodeLimit ||
+      text.contains('\r') ||
+      text.contains('\n') ||
+      text.contains('\x00')) {
+    throw const FormatException('invalid Balíkobot service code');
+  }
+  return text;
+}
+
+List<String> _wireStrings(Object? raw) {
+  if (raw == null) {
+    return const [];
+  }
+  if (raw is! List) {
+    throw const FormatException('invalid Balíkobot string list');
+  }
+  return [for (final entry in raw) _wireString(entry)];
+}
+
+int? _majorPriceToMinor(Object? raw) {
+  final String text;
+  if (raw is num) {
+    text = raw.toString();
+  } else if (raw is String) {
+    text = raw;
+  } else {
+    return null;
+  }
+  final trimmed = text.trim();
+  if (trimmed.isEmpty || trimmed.length > _capabilityPriceLimit) {
+    return null;
+  }
+  final exponentIndex = trimmed.indexOf(_capabilityExponentPattern);
+  if (exponentIndex >= 0) {
+    final exponent = int.tryParse(trimmed.substring(exponentIndex + 1));
+    if (exponent == null ||
+        exponent < -_capabilityExponentLimit ||
+        exponent > _capabilityExponentLimit) {
+      return null;
+    }
+  }
+  final match = _capabilityPricePattern.firstMatch(trimmed);
+  if (match == null) {
+    return null;
+  }
+  final whole = match.group(2)!;
+  final fraction = match.group(3) ?? '';
+  if (whole.isEmpty && fraction.isEmpty) {
+    return null;
+  }
+  final encodedExponent = match.group(4);
+  final exponent = encodedExponent == null ? 0 : int.parse(encodedExponent);
+  final digits = BigInt.parse('$whole$fraction');
+  var amount = match.group(1) == '-' ? -digits : digits;
+  final scale = exponent - fraction.length + 2;
+  if (scale >= 0) {
+    amount *= _ten.pow(scale);
+  } else {
+    final divisor = _ten.pow(-scale);
+    if (amount % divisor != BigInt.zero) {
+      return null;
+    }
+    amount ~/= divisor;
+  }
+  if (amount.isNegative || amount > _maxInt64) {
+    return null;
+  }
+  return amount.toInt();
+}
+
+bool _containsControl(String value) {
+  for (final rune in value.runes) {
+    if (rune <= 0x1f || (rune >= 0x7f && rune <= 0x9f)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+bool _validCapabilityServiceCode(String code) =>
+    code.isNotEmpty &&
+    code.runes.length <= _capabilityServiceLimit &&
+    !code.contains('/') &&
+    !code.contains('\\') &&
+    !_containsControl(code);
+
+bool _sameService(capabilities.Service left, capabilities.Service right) =>
+    left.code == right.code &&
+    left.name == right.name &&
+    left.homeDelivery == right.homeDelivery &&
+    left.boxDelivery == right.boxDelivery &&
+    left.pickupPointsDelivery == right.pickupPointsDelivery;
+
+capabilities.Service _normalizeActivatedService(_ActivatedServiceWire wire) {
+  final code = wire.code;
+  if (code == null) {
+    throw const FormatException('invalid Balíkobot activated service');
+  }
+  final serviceType = code.trim();
+  final name = wire.name.trim();
+  if (!_validCapabilityServiceCode(serviceType) ||
+      name.isEmpty ||
+      name.runes.length > _capabilityNameLimit ||
+      _containsControl(name)) {
+    throw const FormatException('invalid Balíkobot activated service');
+  }
+  return capabilities.Service(
+    code: serviceType,
+    name: name,
+    homeDelivery: wire.homeDelivery,
+    boxDelivery: wire.boxDelivery,
+    pickupPointsDelivery: wire.pickupPointsDelivery,
+    countries: <Country, bool>{},
+  );
+}
+
+(List<capabilities.Service>, Map<String, int>) _normalizeActivatedServices(
+  _ActivatedServicesCapabilityResponse activated,
+) {
+  if (activated.serviceTypes.length > _capabilityServiceLimit) {
+    throw const FormatException('invalid Balíkobot activated services');
+  }
+  final services = <capabilities.Service>[];
+  final index = <String, int>{};
+  for (final wire in activated.serviceTypes) {
+    final service = _normalizeActivatedService(wire);
+    if (activated.activeParcel == false) {
+      continue;
+    }
+    final previous = index[service.code];
+    if (previous != null) {
+      if (!_sameService(services[previous], service)) {
+        throw const FormatException('invalid Balíkobot activated services');
+      }
+      continue;
+    }
+    index[service.code] = services.length;
+    services.add(service);
+  }
+  return (services, index);
+}
+
+void _mergeCapabilityCountries(
+  List<capabilities.Service> services,
+  Map<String, int> index,
+  _CountriesCapabilityResponse countries,
+) {
+  if (countries.serviceTypes.length > _capabilityServiceLimit) {
+    throw const FormatException('invalid Balíkobot countries response');
+  }
+  for (final wire in countries.serviceTypes) {
+    final code = wire.code;
+    if (code == null) {
+      throw const FormatException('invalid Balíkobot countries response');
+    }
+    final serviceType = code.trim();
+    if (!_validCapabilityServiceCode(serviceType) ||
+        wire.countries.length > _capabilityServiceLimit) {
+      throw const FormatException('invalid Balíkobot countries response');
+    }
+    final serviceIndex = index[serviceType];
+    if (serviceIndex == null) {
+      continue;
+    }
+    final merged = services[serviceIndex].countries;
+    for (final rawCountry in wire.countries) {
+      final country = Country(rawCountry.trim().toUpperCase());
+      if (_isEUCountryCode(country)) {
+        merged[country] = true;
+      }
+    }
+  }
+}
+
+void _mergeCapabilityCOD(
+  List<capabilities.Service> services,
+  Map<String, int> index,
+  _CodCapabilityResponse cod,
+) {
+  if (cod.serviceTypes.length > _capabilityServiceLimit) {
+    throw const FormatException('invalid Balíkobot cod response');
+  }
+  for (final wire in cod.serviceTypes) {
+    final code = wire.code;
+    if (code == null) {
+      throw const FormatException('invalid Balíkobot cod response');
+    }
+    final serviceType = code.trim();
+    if (!_validCapabilityServiceCode(serviceType) ||
+        wire.countries.length > _capabilityServiceLimit) {
+      throw const FormatException('invalid Balíkobot cod response');
+    }
+    final serviceIndex = index[serviceType];
+    if (serviceIndex == null) {
+      continue;
+    }
+    final service = services[serviceIndex];
+    services[serviceIndex] = capabilities.Service(
+      code: service.code,
+      name: service.name,
+      homeDelivery: service.homeDelivery,
+      boxDelivery: service.boxDelivery,
+      pickupPointsDelivery: service.pickupPointsDelivery,
+      countries: service.countries,
+      cod: _mergeCODCountries(service.cod, wire.countries),
+    );
+  }
+}
+
+List<capabilities.CODCapability> _mergeCODCountries(
+  List<capabilities.CODCapability> entries,
+  List<_CodCountryWire> countries,
+) {
+  final result = entries.toList();
+  for (final entry in countries) {
+    final capability = _normalizeCODCapability(entry);
+    if (!_isEUCountryCode(capability.country)) {
+      continue;
+    }
+    final existing = _findCODCapability(
+      result,
+      capability.country,
+      capability.currency,
+    );
+    if (existing != null) {
+      if (existing != capability) {
+        throw const FormatException('invalid Balíkobot cod countries');
+      }
+      continue;
+    }
+    result.add(capability);
+  }
+  return result;
+}
+
+List<capabilities.CODCapability> _normalizeCODCountries(
+  List<_CodCountryWire> countries,
+) {
+  final entries = <capabilities.CODCapability>[];
+  for (final entry in countries) {
+    final capability = _normalizeCODCapability(entry);
+    final existing = _findCODCapability(
+      entries,
+      capability.country,
+      capability.currency,
+    );
+    if (existing != null) {
+      if (existing != capability) {
+        throw const FormatException('invalid Balíkobot cod countries');
+      }
+      continue;
+    }
+    entries.add(capability);
+  }
+  return entries;
+}
+
+capabilities.CODCapability _normalizeCODCapability(_CodCountryWire wire) {
+  final Country country;
+  final Currency currency;
+  try {
+    country = Country.fromString(wire.country);
+    currency = Currency.fromString(wire.currency);
+  } on FormatException {
+    throw const FormatException('invalid Balíkobot cod country');
+  }
+  final minor = _majorPriceToMinor(wire.maxPrice);
+  if (minor == null) {
+    throw const FormatException('invalid Balíkobot cod country');
+  }
+  return capabilities.CODCapability(
+    country: country,
+    currency: currency,
+    maxAmountMinor: minor,
+  );
+}
+
+capabilities.CODCapability? _findCODCapability(
+  List<capabilities.CODCapability> entries,
+  Country target,
+  Currency targetCurrency,
+) {
+  for (final entry in entries) {
+    if (entry.country == target && entry.currency == targetCurrency) {
+      return entry;
+    }
+  }
+  return null;
+}
+
+List<capabilities.Service> _normalizeCapabilities(
+  _ActivatedServicesCapabilityResponse activated,
+  _CountriesCapabilityResponse countries,
+  _CodCapabilityResponse cod,
+) {
+  final (services, index) = _normalizeActivatedServices(activated);
+  _mergeCapabilityCountries(services, index, countries);
+  _mergeCapabilityCOD(services, index, cod);
+  return services;
+}
+
+List<capabilities.Carrier> _scopedCapabilityCarriers(
+  List<_CapabilityCarrierWire> contracted,
+  List<Carrier>? scope,
+) {
+  if (contracted.length > _capabilityCarrierLimit) {
+    throw const FormatException('invalid Balíkobot capability carriers');
+  }
+  final available = <Carrier>{};
+  for (final entry in contracted) {
+    available.add(_capabilityCarrierCode(entry.slug));
+  }
+  final requested = <Carrier>{};
+  if (scope == null) {
+    requested.addAll(available);
+  } else {
+    for (final candidate in scope) {
+      final code = _capabilityCarrierCode(candidate.value);
+      if (!available.contains(code)) {
+        throw const FormatException('invalid Balíkobot capability carriers');
+      }
+      requested.add(code);
+    }
+  }
+  final carriers = <capabilities.Carrier>[];
+  for (final entry in contracted) {
+    final code = _capabilityCarrierCode(entry.slug);
+    if (!requested.remove(code)) {
+      continue;
+    }
+    carriers.add(capabilities.Carrier(carrierCode: code));
+  }
+  return carriers;
+}
+
+Carrier _capabilityCarrierCode(String value) {
+  try {
+    return Carrier.fromString(value);
+  } on FormatException {
+    throw const FormatException('invalid Balíkobot capability carrier');
+  }
+}
+
+bool _isEUCountryCode(Country code) {
+  switch (code.value) {
+    case 'AT':
+    case 'BE':
+    case 'BG':
+    case 'HR':
+    case 'CY':
+    case 'CZ':
+    case 'DK':
+    case 'EE':
+    case 'FI':
+    case 'FR':
+    case 'DE':
+    case 'GR':
+    case 'HU':
+    case 'IE':
+    case 'IT':
+    case 'LV':
+    case 'LT':
+    case 'LU':
+    case 'MT':
+    case 'NL':
+    case 'PL':
+    case 'PT':
+    case 'RO':
+    case 'SK':
+    case 'SI':
+    case 'ES':
+    case 'SE':
+      return true;
+  }
+  return false;
+}
+
 const int _branchFieldLimit = 200;
 const int _zipLimit = 16;
 const int _addFieldLimit = 255;
@@ -939,6 +1580,19 @@ const int _trackReferenceModulus = 10000000000;
 const int _pickupPackageLimit = 10000;
 const int _pickupWeightLimit = 100000;
 const int _pickupNoteLimit = 255;
+const int _capabilityCarrierLimit = 128;
+const int _capabilityServiceLimit = 512;
+const int _capabilityNameLimit = 512;
+const int _capabilityServiceCodeLimit = 64;
+const int _capabilityPriceLimit = 64;
+const int _capabilityExponentLimit = 64;
+final BigInt _ten = BigInt.from(10);
+final BigInt _maxInt64 = BigInt.parse('9223372036854775807');
+final RegExp _capabilityKeyPattern = RegExp(r'^[0-9]+$');
+final RegExp _capabilityExponentPattern = RegExp('[eE]');
+final RegExp _capabilityPricePattern = RegExp(
+  r'^([+-]?)([0-9]*)(?:\.([0-9]*))?(?:[eE]([+-]?[0-9]+))?$',
+);
 const String _pdfMediaType = 'application/pdf';
 const String _zplMediaType = 'application/zpl';
 const String _pdfMagicPrefix = '%PDF-';
