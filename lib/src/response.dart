@@ -16,10 +16,12 @@ extension on BalikobotClient {
         timeout: timeout,
         maxResponseBytes: _maxResponseBytes,
       );
-    } on RequestTimeoutException catch (error) {
-      throw _TransportFailure(error);
-    } on NetworkException catch (error) {
-      throw _TransportFailure(error);
+    } on RequestTimeoutException {
+      throw const _TransportFailure();
+    } on NetworkException {
+      throw const _TransportFailure();
+    } on IOException {
+      throw const _TransportFailure();
     }
   }
 }
@@ -29,7 +31,20 @@ bool _isJson(RestResponse response) {
   if (header == null) {
     return false;
   }
-  return header.split(';').first.trim().toLowerCase() == 'application/json';
+  final parts = header.split(';');
+  if (parts.first.trim().toLowerCase() != 'application/json') {
+    return false;
+  }
+  for (final parameter in parts.skip(1)) {
+    final trimmed = parameter.trim();
+    if (trimmed.isEmpty) {
+      continue;
+    }
+    if (trimmed.indexOf('=') <= 0) {
+      return false;
+    }
+  }
+  return true;
 }
 
 Object? _decode(RestResponse response) => jsonDecode(response.body);
@@ -41,9 +56,7 @@ BalikobotException _error(
 ]) => BalikobotException(code, message, retryAfter);
 
 class _TransportFailure implements Exception {
-  const _TransportFailure(this.cause);
-
-  final Object cause;
+  const _TransportFailure();
 }
 
 class _BranchWire {

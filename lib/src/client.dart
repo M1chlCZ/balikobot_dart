@@ -100,12 +100,14 @@ class BalikobotClient {
   /// the remaining carriers use the service-only route with a client-side
   /// country filter. An invalid [carrier], [service] or [country] throws a
   /// [BalikobotException] with [BalikobotError.invalidRequest] before any
-  /// request is sent.
+  /// request is sent. [timeout] overrides the configured request timeout for
+  /// this call.
   Future<List<Branch>> branches(
     Carrier carrier,
     String service,
-    Country country,
-  ) async {
+    Country country, {
+    Duration? timeout,
+  }) async {
     if (!carrier.isValid ||
         !_servicePattern.hasMatch(service) ||
         !country.isValid) {
@@ -114,7 +116,7 @@ class BalikobotClient {
     final (path, filterCountry) = _branchesPath(carrier, service, country);
     final RestResponse response;
     try {
-      response = await _sendRequest('GET', path);
+      response = await _sendRequest('GET', path, timeout: timeout);
     } on _TransportFailure {
       throw _error(BalikobotError.unavailable);
     } on ResponseLimitException {

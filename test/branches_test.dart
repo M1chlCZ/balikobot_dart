@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:balikobot_dart/balikobot_dart.dart';
 import 'package:http/http.dart' as http;
@@ -160,6 +161,50 @@ void main() {
       );
     });
 
+    test('honors a per-call timeout', () async {
+      final client = buildClient(
+        MockClient((request) async {
+          await Future<void>.delayed(const Duration(milliseconds: 50));
+          return jsonResponse({'status': 200, 'branches': <Object>[]});
+        }),
+      );
+      addTearDown(client.close);
+
+      await expectLater(
+        client.branches(
+          Carrier.ppl,
+          '1',
+          Country.cz,
+          timeout: const Duration(milliseconds: 5),
+        ),
+        throwsA(
+          isA<BalikobotException>().having(
+            (error) => error.code,
+            'code',
+            BalikobotError.unavailable,
+          ),
+        ),
+      );
+    });
+
+    test('maps a transport IO failure to unavailable', () async {
+      final client = buildClient(
+        MockClient((request) async => throw const HandshakeException('boom')),
+      );
+      addTearDown(client.close);
+
+      await expectLater(
+        client.branches(Carrier.ppl, '1', Country.cz),
+        throwsA(
+          isA<BalikobotException>().having(
+            (error) => error.code,
+            'code',
+            BalikobotError.unavailable,
+          ),
+        ),
+      );
+    });
+
     test('maps an oversized response to unavailable', () async {
       final client = BalikobotClient(
         Config(
@@ -194,6 +239,30 @@ void main() {
         MockClient(
           (request) async =>
               jsonResponse({'status': 'OK', 'branches': <Object>[]}),
+        ),
+      );
+      addTearDown(client.close);
+
+      await expectLater(
+        client.branches(Carrier.ppl, '1', Country.cz),
+        throwsA(
+          isA<BalikobotException>().having(
+            (error) => error.code,
+            'code',
+            BalikobotError.invalidResponse,
+          ),
+        ),
+      );
+    });
+
+    test('rejects a malformed content type parameter', () async {
+      final client = buildClient(
+        MockClient.streaming(
+          (request, bodyStream) async => http.StreamedResponse(
+            Stream.value(utf8.encode('{"status":200,"branches":[]}')),
+            200,
+            headers: {'content-type': 'application/json; foo'},
+          ),
         ),
       );
       addTearDown(client.close);
