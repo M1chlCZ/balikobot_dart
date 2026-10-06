@@ -11,7 +11,7 @@ error. The package uses the `http` and `json_rest_client` libraries.
 dart pub add balikobot_dart
 ```
 
-Dart 3.13 or later is required. Only a loopback test server may use the `http`
+You need Dart 3.13 or later. Only a loopback test server can use the `http`
 scheme. Every other base URL must use `https`.
 
 ## Quick start
@@ -128,9 +128,9 @@ holds one of six `BalikobotError` values.
 | `BalikobotError.ambiguous` | A mutating call can have reached the provider. | Reconcile with `overview`. Then retry. |
 | `BalikobotError.invalidResponse` | The answer violates the protocol. | Inspect the provider. Do not retry blindly. |
 
-When a JSON answer carries a `Retry-After` header, the exception of a
-`BalikobotError.unavailable` failure carries the `retryAfter` field. Read the
-field and wait before the next call:
+When a 429 response carries a `Retry-After` header, an `unavailable` failure
+carries the `retryAfter` field on `BalikobotException`. Read the field and wait
+before the next call:
 
 ```dart
 try {
@@ -158,16 +158,16 @@ limit of 4 MiB. The client refuses redirects. It compares the response
 ## Account mode
 
 Set `Config.liveAccount` to `true` or `false` to verify the account before each
-mutating call. The client calls WHOAMI and compares the `live_account` flag. A
+non-GET call. The client calls WHOAMI and compares the `live_account` flag. A
 mismatch blocks the write before the client sends it. A successful result stays
 valid for five minutes. If `Config.liveAccount` is null, the client skips this
 check.
 
 ## Label hosts
 
-The client accepts label URLs only from the Balíkobot label hosts
-(`pdf.balikobot.cz` and the `*.balikobot.cz` subdomains), or from the base URL
-origin for a loopback test server. Set `Config.labelHosts` to replace the
+The client accepts label URLs only from `pdf.balikobot.cz` and the
+`*.balikobot.cz` subdomains. It also accepts the base URL origin of a loopback
+test server. Set `Config.labelHosts` to replace the
 default allowlist with other hosts. A leading dot selects a subdomain suffix
 match; it does not match the bare domain.
 
