@@ -1,0 +1,21 @@
+name: balikobot_dart
+description: >-
+  A zero-dependency Dart client for the Balikobot shipping API v2:
+  packages, labels, tracking, pickups, and carrier capabilities.
+version: 0.1.0
+repository: https://github.com/M1chlCZ/balikobot_dart
+issue_tracker: https://github.com/M1chlCZ/balikobot_dart/issues
+topics:
+  - http
+  - rest
+  - balikobot
+  - shipping
+  - api
+environment:
+  sdk: ^3.13.0
+dependencies:
+  http: ^1.6.0
+  json_rest_client: ^0.1.1
+dev_dependencies:
+  lints: ^6.1.0
+  test: ^1.32.0
