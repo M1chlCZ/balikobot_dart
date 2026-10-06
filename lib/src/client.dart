@@ -6,7 +6,13 @@ import 'package:http/io_client.dart';
 import 'package:json_rest_client/json_rest_client.dart';
 import 'package:meta/meta.dart';
 
+import 'codes/carrier.dart';
+import 'codes/country.dart';
 import 'config.dart';
+import 'errors.dart';
+import 'models/branch.dart';
+
+part 'response.dart';
 
 /// A client for the Balíkobot API v2.
 ///
@@ -41,6 +47,9 @@ class BalikobotClient {
         ? _defaultTimeout
         : config.timeout;
     _ownsHttpClient = config.httpClient == null;
+    _maxResponseBytes = config.maxResponseBytes == 0
+        ? _defaultMaxResponseBytes
+        : config.maxResponseBytes;
     _httpClient = _NoRedirectClient(
       config.httpClient ?? IOClient(HttpClient()),
       closeInner: _ownsHttpClient,
@@ -61,6 +70,7 @@ class BalikobotClient {
   late final http.Client _httpClient;
   late final bool _ownsHttpClient;
   late final JsonRestClient _rest;
+  late final int _maxResponseBytes;
   bool _closed = false;
 
   /// The wrapped HTTP client used for every request.
@@ -80,6 +90,94 @@ class BalikobotClient {
     _closed = true;
     _rest.close();
     _httpClient.close();
+  }
+
+  /// Calls the BRANCHES method and returns the branches of one [carrier]
+  /// service in one [country].
+  ///
+  /// The route depends on the carrier: the selected carriers use the combined
+  /// service and country segments, Zásilkovna uses the country-only route, and
+  /// the remaining carriers use the service-only route with a client-side
+  /// country filter. An invalid [carrier], [service] or [country] throws a
+  /// [BalikobotException] with [BalikobotError.invalidRequest] before any
+  /// request is sent.
+  Future<List<Branch>> branches(
+    Carrier carrier,
+    String service,
+    Country country,
+  ) async {
+    if (!carrier.isValid ||
+        !_servicePattern.hasMatch(service) ||
+        !country.isValid) {
+      throw _error(BalikobotError.invalidRequest);
+    }
+    final (path, filterCountry) = _branchesPath(carrier, service, country);
+    final RestResponse response;
+    try {
+      response = await _sendRequest('GET', path);
+    } on _TransportFailure {
+      throw _error(BalikobotError.unavailable);
+    } on ResponseLimitException {
+      throw _error(BalikobotError.unavailable);
+    }
+    final statusCode = response.statusCode;
+    if (statusCode == 429 || statusCode >= 500) {
+      throw _transient(response);
+    }
+    if (statusCode != 200 || !_isJson(response)) {
+      throw _error(BalikobotError.invalidResponse);
+    }
+    final ({int status, List<_BranchWire> branches}) payload;
+    try {
+      payload = _branchesResponse(_decode(response));
+    } on FormatException {
+      throw _error(BalikobotError.invalidResponse);
+    }
+    switch (payload.status) {
+      case 200:
+        break;
+      case 426:
+      case 503:
+        throw _error(BalikobotError.unavailable);
+      default:
+        throw _error(BalikobotError.invalidResponse);
+    }
+    final branches = <Branch>[];
+    for (final wire in payload.branches) {
+      final branch = _sanitizeBranch(wire);
+      if (branch == null) {
+        continue;
+      }
+      if (filterCountry &&
+          branch.country.value.isNotEmpty &&
+          branch.country != country) {
+        continue;
+      }
+      branches.add(branch);
+    }
+    return branches;
+  }
+}
+
+(String, bool) _branchesPath(Carrier carrier, String service, Country country) {
+  final path = '/${carrier.value}/branches/service/$service';
+  switch (carrier.value) {
+    case 'ppl':
+    case 'dpd':
+    case 'dpdcz':
+    case 'dpdsk':
+    case 'geis':
+    case 'gls':
+    case 'intime':
+      return ('$path/country/${country.value}', false);
+    case 'cp':
+    case 'ceskaposta':
+    case 'balikovna':
+      return ('$path/country/${country.value}', true);
+    case 'zasilkovna':
+      return ('/zasilkovna/branches/country/${country.value}', false);
+    default:
+      return (path, true);
   }
 }
 
@@ -160,6 +258,7 @@ class _EmptyTokenStore implements TokenStore {
 
 const String _defaultBaseUrl = 'https://apiv2.balikobot.cz';
 const Duration _defaultTimeout = Duration(seconds: 30);
+const int _defaultMaxResponseBytes = 8 << 20;
 const String _userAgent = 'balikobot_dart/0.1.0';
 const int _userLimit = 100;
 const int _apiKeyLimit = 4096;

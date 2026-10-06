@@ -7,3 +7,4 @@ export 'src/codes/country.dart';
 export 'src/codes/currency.dart';
 export 'src/config.dart';
 export 'src/errors.dart';
+export 'src/models/branch.dart';
