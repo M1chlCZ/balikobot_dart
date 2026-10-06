@@ -160,29 +160,6 @@ void main() {
       );
     });
 
-    test('carries the clamped retry hint of a transient response', () async {
-      final client = buildClient(
-        MockClient(
-          (request) async =>
-              http.Response('', 429, headers: {'retry-after': '7200'}),
-        ),
-      );
-      addTearDown(client.close);
-
-      await expectLater(
-        client.branches(Carrier.ppl, '1', Country.cz),
-        throwsA(
-          isA<BalikobotException>()
-              .having((error) => error.code, 'code', BalikobotError.unavailable)
-              .having(
-                (error) => error.retryAfter,
-                'retryAfter',
-                const Duration(hours: 1),
-              ),
-        ),
-      );
-    });
-
     test('maps an oversized response to unavailable', () async {
       final client = BalikobotClient(
         Config(

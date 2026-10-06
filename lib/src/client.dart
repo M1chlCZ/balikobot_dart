@@ -122,7 +122,7 @@ class BalikobotClient {
     }
     final statusCode = response.statusCode;
     if (statusCode == 429 || statusCode >= 500) {
-      throw _transient(response);
+      throw _error(BalikobotError.unavailable);
     }
     if (statusCode != 200 || !_isJson(response)) {
       throw _error(BalikobotError.invalidResponse);

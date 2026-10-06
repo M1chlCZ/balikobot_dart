@@ -34,26 +34,11 @@ bool _isJson(RestResponse response) {
 
 Object? _decode(RestResponse response) => jsonDecode(response.body);
 
-Duration? _retryAfter(RestResponse response) {
-  final header = response.headers['retry-after'];
-  if (header == null) {
-    return null;
-  }
-  final seconds = int.tryParse(header.trim());
-  if (seconds == null || seconds < 1) {
-    return null;
-  }
-  return Duration(seconds: seconds > 3600 ? 3600 : seconds);
-}
-
 BalikobotException _error(
   BalikobotError code, [
   String message = '',
   Duration? retryAfter,
 ]) => BalikobotException(code, message, retryAfter);
-
-BalikobotException _transient(RestResponse response) =>
-    _error(BalikobotError.unavailable, '', _retryAfter(response));
 
 class _TransportFailure implements Exception {
   const _TransportFailure(this.cause);
