@@ -112,6 +112,20 @@ void main() {
       expect(result.orderId, 'order-ppl-2274514');
     });
 
+    test('returns the original order id for a 208 replay', () async {
+      final client = buildClient(
+        MockClient(
+          (request) async =>
+              jsonResponse({'status': 208, 'order_id': 'order-ppl-2274514'}),
+        ),
+      );
+      addTearDown(client.close);
+
+      final result = await client.orderBatch(Carrier.ppl, 'add-ppl-1');
+
+      expect(result.orderId, 'order-ppl-2274514');
+    });
+
     test('maps a body status 400 to rejected', () async {
       final client = buildClient(
         MockClient((request) async => jsonResponse({'status': 400})),

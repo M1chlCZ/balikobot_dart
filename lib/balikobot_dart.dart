@@ -1,4 +1,4 @@
-/// A zero-dependency Dart client for the Balikobot shipping API v2.
+/// A Dart client for the Balikobot shipping API v2.
 library;
 
 export 'src/client.dart';
