@@ -36,9 +36,15 @@ class WhoAmICarrier {
 }
 
 /// The activated services of one contracted carrier.
-class Carrier {
+///
+/// The name avoids a collision with the carrier code class, which the package
+/// exports as `Carrier`.
+class ContractedCarrier {
   /// Creates a carrier capability snapshot.
-  const Carrier({required this.carrierCode, this.services = const []});
+  const ContractedCarrier({
+    required this.carrierCode,
+    this.services = const [],
+  });
 
   /// The carrier code used in request paths.
   final codes.Carrier carrierCode;
@@ -46,12 +52,6 @@ class Carrier {
   /// The activated services of the carrier.
   final List<Service> services;
 }
-
-/// Names the [Carrier] capability snapshot unambiguously.
-///
-/// The package also exports the carrier code class as `Carrier`, so this alias
-/// is the public name of the aggregate type.
-typedef CarrierCapabilities = Carrier;
 
 /// One activated carrier service.
 class Service {

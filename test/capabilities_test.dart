@@ -128,6 +128,68 @@ void main() {
   });
 
   group('cod', () {
+    test(
+      'converts exact prices and rejects imprecise or quoted prices',
+      () async {
+        Future<void> expectInvalid(Object maxPrice) async {
+          final rejecting = buildClient(
+            MockClient(
+              (request) async => jsonResponse({
+                'status': 200,
+                'service_types': [
+                  {
+                    'service_type': 'VMCZ',
+                    'countries': [
+                      {
+                        'country': 'CZ',
+                        'currency': 'CZK',
+                        'max_price': maxPrice,
+                      },
+                    ],
+                  },
+                ],
+              }),
+            ),
+          );
+          addTearDown(rejecting.close);
+          await expectLater(
+            rejecting.cod(Carrier.ppl),
+            throwsA(
+              isA<BalikobotException>().having(
+                (error) => error.code,
+                'code',
+                BalikobotError.invalidResponse,
+              ),
+            ),
+          );
+        }
+
+        final client = buildClient(
+          MockClient(
+            (request) async => jsonResponse({
+              'status': 200,
+              'service_types': [
+                {
+                  'service_type': 'VMCZ',
+                  'countries': [
+                    {'country': 'CZ', 'currency': 'CZK', 'max_price': 1499.95},
+                  ],
+                },
+              ],
+            }),
+          ),
+        );
+        addTearDown(client.close);
+
+        final result = await client.cod(Carrier.ppl);
+
+        expect(result.single.countries.single.maxAmountMinor, 149995);
+
+        await expectInvalid(92233720368547758.07);
+        await expectInvalid('5');
+      },
+    );
+
     test('treats an unsupported dictionary as empty', () async {
       final client = buildClient(
         MockClient((request) async => http.Response('', 501)),
@@ -182,7 +244,7 @@ void main() {
       );
       addTearDown(client.close);
 
-      final List<CarrierCapabilities> carriers = await client
+      final List<ContractedCarrier> carriers = await client
           .carrierCapabilities();
 
       expect(carriers, hasLength(1));

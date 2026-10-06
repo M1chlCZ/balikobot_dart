@@ -1012,18 +1012,18 @@ class BalikobotClient {
   /// [BalikobotError.invalidResponse]. The returned destinations are
   /// restricted to EU countries, matching the reference integration. [timeout]
   /// overrides the configured request timeout for this call.
-  Future<List<capabilities.Carrier>> carrierCapabilities({
+  Future<List<capabilities.ContractedCarrier>> carrierCapabilities({
     List<Carrier>? scope,
     Duration? timeout,
   }) async {
     final whoami = await _verifiedWhoAmI(allowCached: false);
-    final List<capabilities.Carrier> carriers;
+    final List<capabilities.ContractedCarrier> carriers;
     try {
       carriers = _scopedCapabilityCarriers(whoami.carriers, scope);
     } on FormatException {
       throw _error(BalikobotError.invalidResponse);
     }
-    final result = <capabilities.Carrier>[];
+    final result = <capabilities.ContractedCarrier>[];
     for (final carrier in carriers) {
       final carrierCode = carrier.carrierCode;
       final activated = _ActivatedServicesCapabilityResponse();
@@ -1042,7 +1042,7 @@ class BalikobotClient {
       );
       try {
         result.add(
-          capabilities.Carrier(
+          capabilities.ContractedCarrier(
             carrierCode: carrierCode,
             services: _normalizeCapabilities(
               activated,

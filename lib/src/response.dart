@@ -1215,10 +1215,13 @@ List<String> _wireStrings(Object? raw) {
 
 int? _majorPriceToMinor(Object? raw) {
   final String text;
-  if (raw is num) {
+  if (raw is int) {
     text = raw.toString();
-  } else if (raw is String) {
-    text = raw;
+  } else if (raw is double) {
+    text = raw.toString();
+    if (_significantDigits(text) > _capabilityPriceDigits) {
+      return null;
+    }
   } else {
     return null;
   }
@@ -1262,6 +1265,21 @@ int? _majorPriceToMinor(Object? raw) {
     return null;
   }
   return amount.toInt();
+}
+
+int _significantDigits(String text) {
+  var digits = text;
+  if (digits.startsWith('+') || digits.startsWith('-')) {
+    digits = digits.substring(1);
+  }
+  final exponentIndex = digits.indexOf(_capabilityExponentPattern);
+  if (exponentIndex >= 0) {
+    digits = digits.substring(0, exponentIndex);
+  }
+  digits = digits.replaceAll('.', '');
+  digits = digits.replaceFirst(RegExp(r'^0+'), '');
+  digits = digits.replaceFirst(RegExp(r'0+$'), '');
+  return digits.length;
 }
 
 bool _containsControl(String value) {
@@ -1495,7 +1513,7 @@ List<capabilities.Service> _normalizeCapabilities(
   return services;
 }
 
-List<capabilities.Carrier> _scopedCapabilityCarriers(
+List<capabilities.ContractedCarrier> _scopedCapabilityCarriers(
   List<_CapabilityCarrierWire> contracted,
   List<Carrier>? scope,
 ) {
@@ -1518,13 +1536,13 @@ List<capabilities.Carrier> _scopedCapabilityCarriers(
       requested.add(code);
     }
   }
-  final carriers = <capabilities.Carrier>[];
+  final carriers = <capabilities.ContractedCarrier>[];
   for (final entry in contracted) {
     final code = _capabilityCarrierCode(entry.slug);
     if (!requested.remove(code)) {
       continue;
     }
-    carriers.add(capabilities.Carrier(carrierCode: code));
+    carriers.add(capabilities.ContractedCarrier(carrierCode: code));
   }
   return carriers;
 }
@@ -1585,6 +1603,7 @@ const int _capabilityServiceLimit = 512;
 const int _capabilityNameLimit = 512;
 const int _capabilityServiceCodeLimit = 64;
 const int _capabilityPriceLimit = 64;
+const int _capabilityPriceDigits = 15;
 const int _capabilityExponentLimit = 64;
 final BigInt _ten = BigInt.from(10);
 final BigInt _maxInt64 = BigInt.parse('9223372036854775807');
