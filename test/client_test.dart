@@ -1,5 +1,8 @@
+import 'dart:io';
+
 import 'package:balikobot_dart/balikobot_dart.dart';
 import 'package:http/http.dart' as http;
+import 'package:http/io_client.dart';
 import 'package:http/testing.dart';
 import 'package:test/test.dart';
 
@@ -100,6 +103,58 @@ void main() {
         () => buildClient(labelHosts: const ['pdf.balikobot.cz/labels']),
         throwsArgumentError,
       );
+    });
+  });
+
+  group('redirect refusal', () {
+    late HttpServer server;
+    late String baseUrl;
+    final hits = <String>[];
+
+    setUp(() async {
+      hits.clear();
+      server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      server.listen((request) async {
+        hits.add(request.uri.path);
+        if (request.uri.path == '/a') {
+          request.response
+            ..statusCode = HttpStatus.found
+            ..headers.set(HttpHeaders.locationHeader, '/b');
+        }
+        await request.response.close();
+      });
+      baseUrl = 'http://127.0.0.1:${server.port}';
+    });
+
+    tearDown(() async {
+      await server.close(force: true);
+    });
+
+    test('the owned client stops at the redirect', () async {
+      final client = BalikobotClient(
+        Config(baseUrl: baseUrl, user: 'user', apiKey: 'key'),
+      );
+      final response = await client.httpClient.get(Uri.parse('$baseUrl/a'));
+      expect(response.statusCode, HttpStatus.found);
+      expect(hits, ['/a']);
+      client.close();
+    });
+
+    test('an injected client stops at the redirect', () async {
+      final injected = IOClient(HttpClient());
+      final client = BalikobotClient(
+        Config(
+          baseUrl: baseUrl,
+          user: 'user',
+          apiKey: 'key',
+          httpClient: injected,
+        ),
+      );
+      final response = await client.httpClient.get(Uri.parse('$baseUrl/a'));
+      expect(response.statusCode, HttpStatus.found);
+      expect(hits, ['/a']);
+      client.close();
+      injected.close();
     });
   });
 }

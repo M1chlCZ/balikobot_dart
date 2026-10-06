@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:http/http.dart' as http;
 import 'package:http/io_client.dart';
 import 'package:json_rest_client/json_rest_client.dart';
+import 'package:meta/meta.dart';
 
 import 'config.dart';
 
@@ -40,7 +41,10 @@ class BalikobotClient {
         ? _defaultTimeout
         : config.timeout;
     _ownsHttpClient = config.httpClient == null;
-    _httpClient = config.httpClient ?? _createOwnedHttpClient();
+    _httpClient = _NoRedirectClient(
+      config.httpClient ?? IOClient(HttpClient()),
+      closeInner: _ownsHttpClient,
+    );
     _rest = JsonRestClient(
       baseUrl: baseUrl,
       client: _httpClient,
@@ -59,6 +63,12 @@ class BalikobotClient {
   late final JsonRestClient _rest;
   bool _closed = false;
 
+  /// The wrapped HTTP client used for every request.
+  ///
+  /// Exposed for tests that verify transport behavior.
+  @visibleForTesting
+  http.Client get httpClient => _httpClient;
+
   /// Releases the resources held by this client.
   ///
   /// The HTTP client owned by this instance is closed; an injected
@@ -69,9 +79,7 @@ class BalikobotClient {
     }
     _closed = true;
     _rest.close();
-    if (_ownsHttpClient) {
-      _httpClient.close();
-    }
+    _httpClient.close();
   }
 }
 
@@ -125,15 +133,23 @@ void _validateLabelHosts(List<String> hosts) {
   }
 }
 
-http.Client _createOwnedHttpClient() => _NoRedirectIOClient(HttpClient());
+class _NoRedirectClient extends http.BaseClient {
+  _NoRedirectClient(this._inner, {required this.closeInner});
 
-class _NoRedirectIOClient extends IOClient {
-  _NoRedirectIOClient(super.inner);
+  final http.Client _inner;
+  final bool closeInner;
 
   @override
-  Future<IOStreamedResponse> send(http.BaseRequest request) {
+  Future<http.StreamedResponse> send(http.BaseRequest request) {
     request.followRedirects = false;
-    return super.send(request);
+    return _inner.send(request);
+  }
+
+  @override
+  void close() {
+    if (closeInner) {
+      _inner.close();
+    }
   }
 }
 
