@@ -1,5 +1,7 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:http/http.dart' as http;
 import 'package:http/io_client.dart';
@@ -8,9 +10,11 @@ import 'package:meta/meta.dart';
 
 import 'codes/carrier.dart';
 import 'codes/country.dart';
+import 'codes/currency.dart';
 import 'config.dart';
 import 'errors.dart';
 import 'models/branch.dart';
+import 'models/shipment.dart';
 
 part 'response.dart';
 
@@ -41,11 +45,14 @@ class BalikobotClient {
         config.maxResponseBytes > _maxResponseBytesLimit) {
       throw ArgumentError(_responseLimitMessage);
     }
-    final baseUrl = _validateBaseUrl(config.baseUrl);
-    _validateLabelHosts(config.labelHosts);
+    final (baseUrl, origin, loopback) = _validateBaseUrl(config.baseUrl);
+    _labelHosts = _normalizeLabelHosts(config.labelHosts);
+    _origin = origin;
+    _loopback = loopback;
     final timeout = config.timeout == Duration.zero
         ? _defaultTimeout
         : config.timeout;
+    _timeout = timeout;
     _ownsHttpClient = config.httpClient == null;
     _maxResponseBytes = config.maxResponseBytes == 0
         ? _defaultMaxResponseBytes
@@ -71,6 +78,10 @@ class BalikobotClient {
   late final bool _ownsHttpClient;
   late final JsonRestClient _rest;
   late final int _maxResponseBytes;
+  late final Duration _timeout;
+  late final List<String> _labelHosts;
+  late final String _origin;
+  late final bool _loopback;
   bool _closed = false;
 
   /// The wrapped HTTP client used for every request.
@@ -159,6 +170,386 @@ class BalikobotClient {
     }
     return branches;
   }
+
+  /// Calls the ADD method with one package.
+  ///
+  /// ADD is idempotent on [AddPackageRequest.eid]: a repeated request with an
+  /// already stored EID returns status 208 together with the original record,
+  /// which maps to a successful result. An invalid [carrier] or [request]
+  /// throws a [BalikobotException] with [BalikobotError.invalidRequest] before
+  /// any request is sent. [timeout] overrides the configured request timeout
+  /// for this call.
+  Future<AddPackageResult> addPackage(
+    Carrier carrier,
+    AddPackageRequest request, {
+    Duration? timeout,
+  }) async {
+    if (!carrier.isValid || !_validAddPackage(request)) {
+      throw _error(BalikobotError.invalidRequest);
+    }
+    final RestResponse response;
+    try {
+      response = await _sendRequest(
+        'POST',
+        '/${carrier.value}/add',
+        body: {
+          'packages': [request.toJson()],
+        },
+        timeout: timeout,
+      );
+    } on _TransportFailure catch (failure) {
+      throw _dispatchFailure(failure);
+    } on ResponseLimitException {
+      throw _error(BalikobotError.ambiguous);
+    }
+    final statusCode = response.statusCode;
+    if (statusCode == 429) {
+      throw _transient(response);
+    }
+    if (statusCode >= 500) {
+      throw _error(BalikobotError.unavailable);
+    }
+    if (statusCode != 200) {
+      if (statusCode >= 200 && statusCode < 300) {
+        throw _error(BalikobotError.ambiguous);
+      }
+      if (statusCode >= 400 && statusCode < 500) {
+        throw _error(BalikobotError.rejected);
+      }
+      throw _error(BalikobotError.invalidResponse);
+    }
+    if (!_isJson(response)) {
+      throw _error(BalikobotError.ambiguous);
+    }
+    final _AddResponse payload;
+    try {
+      payload = _addResponse(_decode(response));
+    } on FormatException {
+      throw _error(BalikobotError.ambiguous);
+    }
+    if (payload.status == null) {
+      throw _error(BalikobotError.ambiguous);
+    }
+    final statusError = _topLevelStatusError(payload.status);
+    if (statusError != null) {
+      if (statusError.code == BalikobotError.invalidResponse) {
+        throw _error(BalikobotError.ambiguous);
+      }
+      throw statusError;
+    }
+    if (payload.packages.length != 1 ||
+        payload.packages.first.eid != request.eid) {
+      throw _error(BalikobotError.ambiguous);
+    }
+    final entry = payload.packages.first;
+    switch (entry.status) {
+      case 200:
+      case 208:
+        if (entry.packageId == null ||
+            entry.carrierId.isEmpty ||
+            !_validBranchField(entry.carrierId, _identifierLimit) ||
+            !_validLabelUrl(entry.labelUrl)) {
+          throw _error(BalikobotError.ambiguous);
+        }
+        return AddPackageResult(
+          packageId: entry.packageId!,
+          carrierId: entry.carrierId,
+          labelUrl: entry.labelUrl,
+        );
+      case 426:
+      case 503:
+        throw _error(BalikobotError.unavailable);
+      case 400:
+      case 403:
+      case 404:
+      case 405:
+      case 406:
+      case 409:
+      case 413:
+      case 423:
+      case 501:
+        throw _error(BalikobotError.rejected);
+      default:
+        throw _error(BalikobotError.ambiguous);
+    }
+  }
+
+  /// Calls the OVERVIEW method, which lists the packages of a [carrier] that
+  /// have not been closed by ORDER yet.
+  ///
+  /// [matchEid] names the single entry whose integrity is required for
+  /// reconciliation: a malformed entry with a different EID is skipped, while
+  /// a malformed matching entry fails the call. An invalid [carrier] throws a
+  /// [BalikobotException] with [BalikobotError.invalidRequest] before any
+  /// request is sent. [timeout] overrides the configured request timeout for
+  /// this call.
+  Future<List<OverviewPackage>> overview(
+    Carrier carrier,
+    String matchEid, {
+    Duration? timeout,
+  }) async {
+    if (!carrier.isValid) {
+      throw _error(BalikobotError.invalidRequest);
+    }
+    final RestResponse response;
+    try {
+      response = await _sendRequest(
+        'GET',
+        '/${carrier.value}/overview',
+        timeout: timeout,
+      );
+    } on _TransportFailure catch (failure) {
+      throw _dispatchFailure(failure);
+    } on ResponseLimitException {
+      throw _error(BalikobotError.ambiguous);
+    }
+    final statusCode = response.statusCode;
+    if (statusCode == 429) {
+      throw _transient(response);
+    }
+    if (statusCode >= 500) {
+      throw _error(BalikobotError.unavailable);
+    }
+    if (statusCode != 200 || !_isJson(response)) {
+      if (statusCode >= 400 && statusCode < 500) {
+        throw _error(BalikobotError.rejected);
+      }
+      throw _error(BalikobotError.invalidResponse);
+    }
+    final _OverviewResponse payload;
+    try {
+      payload = _overviewResponse(_decode(response));
+    } on FormatException {
+      throw _error(BalikobotError.invalidResponse);
+    }
+    final statusError = _topLevelStatusError(payload.status);
+    if (statusError != null) {
+      throw statusError;
+    }
+    final packages = <OverviewPackage>[];
+    for (final entry in payload.packages) {
+      final valid =
+          entry.eid.isNotEmpty &&
+          entry.packageId != null &&
+          entry.carrierId.isNotEmpty &&
+          _validBranchField(entry.carrierId, _identifierLimit) &&
+          _validLabelUrl(entry.labelUrl);
+      if (!valid) {
+        if (entry.eid == matchEid) {
+          throw _error(BalikobotError.invalidResponse);
+        }
+        continue;
+      }
+      packages.add(
+        OverviewPackage(
+          eid: entry.eid,
+          packageId: entry.packageId!,
+          carrierId: entry.carrierId,
+          labelUrl: entry.labelUrl,
+        ),
+      );
+    }
+    return packages;
+  }
+
+  /// Asks for a fresh aggregate label URL of one package that has not entered
+  /// ORDER yet.
+  ///
+  /// An invalid [carrier] or [packageId] throws a [BalikobotException] with
+  /// [BalikobotError.invalidRequest] before any request is sent. [timeout]
+  /// overrides the configured request timeout for this call.
+  Future<String> labels(
+    Carrier carrier,
+    String packageId, {
+    Duration? timeout,
+  }) async {
+    if (!carrier.isValid || !_validPackageId(packageId)) {
+      throw _error(BalikobotError.invalidRequest);
+    }
+    final RestResponse response;
+    try {
+      response = await _sendRequest(
+        'POST',
+        '/${carrier.value}/labels',
+        body: {
+          'package_ids': [packageId],
+        },
+        timeout: timeout,
+      );
+    } on _TransportFailure {
+      throw _error(BalikobotError.unavailable);
+    } on ResponseLimitException {
+      throw _error(BalikobotError.unavailable);
+    }
+    final lookupError = _labelLookupStatus(response);
+    if (lookupError != null) {
+      throw lookupError;
+    }
+    final _LabelsResponse payload;
+    try {
+      payload = _labelsResponse(_decode(response));
+    } on FormatException {
+      throw _error(BalikobotError.invalidResponse);
+    }
+    if (payload.status == null) {
+      throw _error(BalikobotError.invalidResponse);
+    }
+    final statusError = _topLevelStatusError(payload.status);
+    if (statusError != null) {
+      throw statusError;
+    }
+    if (!_validLabelUrl(payload.labelsUrl)) {
+      throw _error(BalikobotError.invalidResponse);
+    }
+    return payload.labelsUrl;
+  }
+
+  /// Retrieves the label URL of an already closed ORDER.
+  ///
+  /// The returned URL is accepted only when the response confirms both the
+  /// requested [orderId] and the membership of the requested [packageId]. An
+  /// invalid [carrier], [orderId] or [packageId] throws a
+  /// [BalikobotException] with [BalikobotError.invalidRequest] before any
+  /// request is sent. [timeout] overrides the configured request timeout for
+  /// this call.
+  Future<String> orderViewLabels(
+    Carrier carrier,
+    String orderId,
+    String packageId, {
+    Duration? timeout,
+  }) async {
+    if (!carrier.isValid ||
+        !_validPackageId(orderId) ||
+        !_validPackageId(packageId)) {
+      throw _error(BalikobotError.invalidRequest);
+    }
+    final RestResponse response;
+    try {
+      response = await _sendRequest(
+        'GET',
+        '/${carrier.value}/orderview/${Uri.encodeComponent(orderId)}',
+        timeout: timeout,
+      );
+    } on _TransportFailure {
+      throw _error(BalikobotError.unavailable);
+    } on ResponseLimitException {
+      throw _error(BalikobotError.unavailable);
+    }
+    final lookupError = _labelLookupStatus(response);
+    if (lookupError != null) {
+      throw lookupError;
+    }
+    final _OrderViewResponse payload;
+    try {
+      payload = _orderViewResponse(_decode(response));
+    } on FormatException {
+      throw _error(BalikobotError.invalidResponse);
+    }
+    final statusError = _topLevelStatusError(payload.status);
+    if (statusError != null) {
+      throw statusError;
+    }
+    if (payload.orderId != orderId ||
+        !payload.packageIds.contains(packageId) ||
+        !_validLabelUrl(payload.labelsUrl)) {
+      throw _error(BalikobotError.invalidResponse);
+    }
+    return payload.labelsUrl;
+  }
+
+  /// Fetches a provider label URL server-to-server.
+  ///
+  /// The body is read once with a hard 4 MiB limit and validated against the
+  /// declared media type and the configured label host rules. The returned
+  /// bytes and media type are owned by the caller. An invalid [labelUrl]
+  /// throws a [BalikobotException] with [BalikobotError.invalidRequest] before
+  /// any request is sent. [timeout] overrides the configured request timeout
+  /// for this call.
+  Future<(Uint8List, String)> downloadLabel(
+    String labelUrl, {
+    Duration? timeout,
+  }) async {
+    if (!_validLabelUrl(labelUrl)) {
+      throw _error(BalikobotError.invalidRequest);
+    }
+    final request = http.Request('GET', Uri.parse(labelUrl));
+    final http.StreamedResponse response;
+    try {
+      response = await _httpClient.send(request).timeout(timeout ?? _timeout);
+    } on TimeoutException {
+      throw _error(BalikobotError.unavailable);
+    } on IOException {
+      throw _error(BalikobotError.unavailable);
+    } on http.ClientException {
+      throw _error(BalikobotError.unavailable);
+    }
+    final statusCode = response.statusCode;
+    if (statusCode == 429 || statusCode >= 500) {
+      throw _error(BalikobotError.unavailable);
+    }
+    if (statusCode != 200) {
+      if (statusCode >= 400 && statusCode < 500) {
+        throw _error(BalikobotError.rejected);
+      }
+      throw _error(BalikobotError.invalidResponse);
+    }
+    final mediaType = _labelMediaType(response.headers['content-type']);
+    if (mediaType != _pdfMediaType && mediaType != _zplMediaType) {
+      throw _error(BalikobotError.invalidResponse);
+    }
+    final Uint8List bytes;
+    try {
+      bytes = await _readLimited(
+        response,
+        _labelResponseLimit,
+      ).timeout(timeout ?? _timeout);
+    } on ResponseLimitException {
+      throw _error(BalikobotError.invalidResponse);
+    } on TimeoutException {
+      throw _error(BalikobotError.unavailable);
+    } on IOException {
+      throw _error(BalikobotError.unavailable);
+    } on http.ClientException {
+      throw _error(BalikobotError.unavailable);
+    }
+    if (bytes.isEmpty) {
+      throw _error(BalikobotError.invalidResponse);
+    }
+    if (mediaType == _pdfMediaType && !_hasPrefix(bytes, _pdfMagicPrefix)) {
+      throw _error(BalikobotError.invalidResponse);
+    }
+    if (mediaType == _zplMediaType && !_hasPrefix(bytes, _zplMagicPrefix)) {
+      throw _error(BalikobotError.invalidResponse);
+    }
+    return (bytes, mediaType!);
+  }
+}
+
+/// Derives the branch id that ADD expects from a stored branch of a carrier.
+///
+/// Česká pošta and Slovenská pošta use the branch ZIP without spaces, the
+/// Uloženka `CP_NP` service does the same, PPL strips the `KM` prefix, and
+/// every other carrier uses the stored branch id unchanged.
+String resolveBranchId(
+  Carrier carrier,
+  String service,
+  String branchId,
+  String branchZip,
+) {
+  switch (carrier.value) {
+    case 'cp':
+    case 'sp':
+      return branchZip.replaceAll(' ', '');
+    case 'ulozenka':
+      if (service == 'CP_NP') {
+        return branchZip.replaceAll(' ', '');
+      }
+      return branchId;
+    case 'ppl':
+      return branchId.startsWith('KM') ? branchId.substring(2) : branchId;
+    default:
+      return branchId;
+  }
 }
 
 (String, bool) _branchesPath(Carrier carrier, String service, Country country) {
@@ -183,7 +574,7 @@ class BalikobotClient {
   }
 }
 
-String _validateBaseUrl(String raw) {
+(String, String, bool) _validateBaseUrl(String raw) {
   var baseUrl = raw.trim();
   if (baseUrl.isEmpty) {
     baseUrl = _defaultBaseUrl;
@@ -216,21 +607,24 @@ String _validateBaseUrl(String raw) {
     default:
       throw ArgumentError(_baseUrlSchemeMessage);
   }
-  return baseUrl;
+  return (baseUrl, '${parsed.scheme}://${parsed.authority}', loopback);
 }
 
-void _validateLabelHosts(List<String> hosts) {
+List<String> _normalizeLabelHosts(List<String> hosts) {
+  final normalized = <String>[];
   for (final host in hosts) {
-    final normalized = host.trim().toLowerCase();
-    if (normalized.isEmpty ||
-        normalized.contains('/') ||
-        normalized.contains('\\') ||
-        normalized.contains('@') ||
-        normalized.contains('?') ||
-        normalized.contains('#')) {
+    final value = host.trim().toLowerCase();
+    if (value.isEmpty ||
+        value.contains('/') ||
+        value.contains('\\') ||
+        value.contains('@') ||
+        value.contains('?') ||
+        value.contains('#')) {
       throw ArgumentError(_labelHostMessage);
     }
+    normalized.add(value);
   }
+  return normalized;
 }
 
 class _NoRedirectClient extends http.BaseClient {

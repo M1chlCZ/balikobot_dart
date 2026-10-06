@@ -16,13 +16,67 @@ extension on BalikobotClient {
         timeout: timeout,
         maxResponseBytes: _maxResponseBytes,
       );
-    } on RequestTimeoutException {
-      throw const _TransportFailure();
-    } on NetworkException {
-      throw const _TransportFailure();
-    } on IOException {
-      throw const _TransportFailure();
+    } on RequestTimeoutException catch (error) {
+      throw _TransportFailure(error);
+    } on NetworkException catch (error) {
+      throw _TransportFailure(error);
+    } on IOException catch (error) {
+      throw _TransportFailure(error);
     }
+  }
+
+  bool _validLabelUrl(String raw) {
+    final Uri parsed;
+    try {
+      parsed = Uri.parse(raw);
+    } on FormatException {
+      return false;
+    }
+    if (parsed.userInfo.isNotEmpty ||
+        parsed.fragment.isNotEmpty ||
+        parsed.path.isEmpty) {
+      return false;
+    }
+    if (parsed.query.isNotEmpty && parsed.query != 'zpl=1') {
+      return false;
+    }
+    if (_labelHosts.isNotEmpty) {
+      return _labelHostAllowed(parsed);
+    }
+    if (_loopback) {
+      return '${parsed.scheme}://${parsed.authority}' == _origin;
+    }
+    return parsed.scheme == 'https' &&
+        (parsed.authority == 'pdf.balikobot.cz' ||
+            parsed.authority.endsWith('.balikobot.cz'));
+  }
+
+  bool _labelHostAllowed(Uri parsed) {
+    if (!_labelSchemeAllowed(parsed)) {
+      return false;
+    }
+    final host = parsed.authority.toLowerCase();
+    final hostname = parsed.host.toLowerCase();
+    for (final allowed in _labelHosts) {
+      final matches = allowed.startsWith('.')
+          ? hostname.endsWith(allowed)
+          : host == allowed;
+      if (matches) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  bool _labelSchemeAllowed(Uri parsed) {
+    if (parsed.scheme == 'https') {
+      return true;
+    }
+    if (parsed.scheme != 'http') {
+      return false;
+    }
+    final address = InternetAddress.tryParse(parsed.host);
+    return address != null && address.isLoopback;
   }
 }
 
@@ -49,14 +103,382 @@ bool _isJson(RestResponse response) {
 
 Object? _decode(RestResponse response) => jsonDecode(response.body);
 
+Duration? _retryAfter(RestResponse response) {
+  final header = response.headers['retry-after'];
+  if (header == null) {
+    return null;
+  }
+  final seconds = int.tryParse(header.trim());
+  if (seconds == null || seconds < 1) {
+    return null;
+  }
+  return Duration(seconds: seconds > 3600 ? 3600 : seconds);
+}
+
 BalikobotException _error(
   BalikobotError code, [
   String message = '',
   Duration? retryAfter,
 ]) => BalikobotException(code, message, retryAfter);
 
+BalikobotException _transient(RestResponse response) =>
+    _error(BalikobotError.unavailable, '', _retryAfter(response));
+
+BalikobotException _dispatchFailure(_TransportFailure failure) {
+  final cause = failure.cause;
+  if (cause is RequestTimeoutException) {
+    return _error(BalikobotError.ambiguous);
+  }
+  if (cause is NetworkException) {
+    final message = cause.message;
+    if (message.contains('Connection refused') ||
+        message.contains('Failed host lookup')) {
+      return _error(BalikobotError.unavailable);
+    }
+  }
+  return _error(BalikobotError.ambiguous);
+}
+
 class _TransportFailure implements Exception {
-  const _TransportFailure();
+  const _TransportFailure(this.cause);
+
+  final Object cause;
+}
+
+bool _validAddPackage(AddPackageRequest request) {
+  if (!_eidPattern.hasMatch(request.eid) ||
+      !_servicePattern.hasMatch(request.serviceType) ||
+      (request.recName.isEmpty && request.recFirm.isEmpty) ||
+      (request.recPhone.isEmpty && request.recEmail.isEmpty) ||
+      (request.codCurrency != Currency.czk &&
+          request.codCurrency != Currency.eur) ||
+      (request.codPrice > 0 && request.vs == null) ||
+      (request.codPrice == 0 && request.vs != null)) {
+    return false;
+  }
+  for (final field in [
+    request.recName,
+    request.recFirm,
+    request.recStreet,
+    request.recCity,
+    request.recZip,
+    request.recPhone,
+    request.recEmail,
+  ]) {
+    if (!_validBranchField(field, _addFieldLimit)) {
+      return false;
+    }
+  }
+  if (request.recStreet.isEmpty ||
+      request.recCity.isEmpty ||
+      request.recZip.isEmpty ||
+      !request.recCountry.isValid) {
+    return false;
+  }
+  if (request.branchId.isNotEmpty &&
+      !_branchIdPattern.hasMatch(request.branchId)) {
+    return false;
+  }
+  if (request.weight <= 0 ||
+      request.weight > 10000 ||
+      request.length <= 0 ||
+      request.length > 1000 ||
+      request.width <= 0 ||
+      request.width > 1000 ||
+      request.height <= 0 ||
+      request.height > 1000) {
+    return false;
+  }
+  if (request.price < 0 ||
+      request.price > 100000000 ||
+      request.codPrice < 0 ||
+      request.codPrice > 100000000) {
+    return false;
+  }
+  final vs = request.vs;
+  if (vs != null && (vs < 0 || vs >= _trackReferenceModulus)) {
+    return false;
+  }
+  return true;
+}
+
+bool _validPackageId(String value) =>
+    value.isNotEmpty && _validBranchField(value, _identifierLimit);
+
+String _packageId(Object? raw) {
+  final String text;
+  if (raw is String) {
+    text = raw;
+  } else if (raw is int) {
+    text = raw.toString();
+  } else {
+    throw const FormatException('invalid Balíkobot package id');
+  }
+  if (!_validPackageId(text)) {
+    throw const FormatException('invalid Balíkobot package id');
+  }
+  return text;
+}
+
+class _AddPackageStatus {
+  const _AddPackageStatus({
+    required this.eid,
+    required this.status,
+    required this.packageId,
+    required this.carrierId,
+    required this.labelUrl,
+  });
+
+  final String eid;
+  final int? status;
+  final String? packageId;
+  final String carrierId;
+  final String labelUrl;
+}
+
+class _AddResponse {
+  const _AddResponse({required this.status, required this.packages});
+
+  final int? status;
+  final List<_AddPackageStatus> packages;
+}
+
+class _OverviewPackageStatus {
+  const _OverviewPackageStatus({
+    required this.eid,
+    required this.packageId,
+    required this.carrierId,
+    required this.labelUrl,
+  });
+
+  final String eid;
+  final String? packageId;
+  final String carrierId;
+  final String labelUrl;
+}
+
+class _OverviewResponse {
+  const _OverviewResponse({required this.status, required this.packages});
+
+  final int? status;
+  final List<_OverviewPackageStatus> packages;
+}
+
+class _LabelsResponse {
+  const _LabelsResponse({required this.status, required this.labelsUrl});
+
+  final int? status;
+  final String labelsUrl;
+}
+
+class _OrderViewResponse {
+  const _OrderViewResponse({
+    required this.status,
+    required this.orderId,
+    required this.packageIds,
+    required this.labelsUrl,
+  });
+
+  final int? status;
+  final String orderId;
+  final List<String> packageIds;
+  final String labelsUrl;
+}
+
+_AddResponse _addResponse(Object? raw) {
+  if (raw is! Map<String, dynamic>) {
+    throw const FormatException('invalid Balíkobot add response');
+  }
+  return _AddResponse(
+    status: _wireStatus(raw),
+    packages: _addPackageStatuses(raw['packages']),
+  );
+}
+
+_AddPackageStatus _addPackageStatus(Object? raw) {
+  if (raw is! Map<String, dynamic>) {
+    throw const FormatException('invalid Balíkobot add package');
+  }
+  return _AddPackageStatus(
+    eid: _wireString(raw['eid']),
+    status: _wireStatus(raw),
+    packageId: raw.containsKey('package_id')
+        ? _packageId(raw['package_id'])
+        : null,
+    carrierId: _wireString(raw['carrier_id']),
+    labelUrl: _wireString(raw['label_url']),
+  );
+}
+
+List<_AddPackageStatus> _addPackageStatuses(Object? raw) {
+  if (raw == null) {
+    return const [];
+  }
+  if (raw is! List) {
+    throw const FormatException('invalid Balíkobot add packages');
+  }
+  return [for (final entry in raw) _addPackageStatus(entry)];
+}
+
+_OverviewResponse _overviewResponse(Object? raw) {
+  if (raw is! Map<String, dynamic>) {
+    throw const FormatException('invalid Balíkobot overview response');
+  }
+  return _OverviewResponse(
+    status: _wireStatus(raw),
+    packages: _overviewPackageStatuses(raw['packages']),
+  );
+}
+
+_OverviewPackageStatus _overviewPackageStatus(Object? raw) {
+  if (raw is! Map<String, dynamic>) {
+    throw const FormatException('invalid Balíkobot overview package');
+  }
+  return _OverviewPackageStatus(
+    eid: _wireString(raw['eid']),
+    packageId: raw.containsKey('package_id')
+        ? _packageId(raw['package_id'])
+        : null,
+    carrierId: _wireString(raw['carrier_id']),
+    labelUrl: _wireString(raw['label_url']),
+  );
+}
+
+List<_OverviewPackageStatus> _overviewPackageStatuses(Object? raw) {
+  if (raw == null) {
+    return const [];
+  }
+  if (raw is! List) {
+    throw const FormatException('invalid Balíkobot overview packages');
+  }
+  return [for (final entry in raw) _overviewPackageStatus(entry)];
+}
+
+_LabelsResponse _labelsResponse(Object? raw) {
+  if (raw is! Map<String, dynamic>) {
+    throw const FormatException('invalid Balíkobot labels response');
+  }
+  return _LabelsResponse(
+    status: _wireStatus(raw),
+    labelsUrl: _wireString(raw['labels_url']),
+  );
+}
+
+_OrderViewResponse _orderViewResponse(Object? raw) {
+  if (raw is! Map<String, dynamic>) {
+    throw const FormatException('invalid Balíkobot order view response');
+  }
+  return _OrderViewResponse(
+    status: _wireStatus(raw),
+    orderId: _wireString(raw['order_id']),
+    packageIds: _packageIdList(raw['package_ids']),
+    labelsUrl: _wireString(raw['labels_url']),
+  );
+}
+
+List<String> _packageIdList(Object? raw) {
+  if (raw == null) {
+    return const [];
+  }
+  if (raw is! List) {
+    throw const FormatException('invalid Balíkobot package ids');
+  }
+  return [for (final entry in raw) _packageId(entry)];
+}
+
+int? _wireStatus(Map<String, dynamic> raw) =>
+    raw.containsKey('status') ? _responseStatus(raw['status']) : null;
+
+BalikobotException? _topLevelStatusError(int? status) {
+  if (status == null) {
+    return null;
+  }
+  switch (status) {
+    case 200:
+    case 208:
+      return null;
+    case 426:
+    case 503:
+      return _error(BalikobotError.unavailable);
+    case 400:
+    case 402:
+    case 403:
+    case 404:
+    case 405:
+    case 406:
+    case 409:
+    case 413:
+    case 423:
+    case 501:
+      return _error(BalikobotError.rejected);
+    default:
+      return _error(BalikobotError.invalidResponse);
+  }
+}
+
+BalikobotException? _labelLookupStatus(RestResponse response) {
+  final statusCode = response.statusCode;
+  if (statusCode == 429) {
+    return _transient(response);
+  }
+  if (statusCode >= 500) {
+    return _error(BalikobotError.unavailable);
+  }
+  if (statusCode != 200 || !_isJson(response)) {
+    if (statusCode >= 400 && statusCode < 500) {
+      return _error(BalikobotError.rejected);
+    }
+    return _error(BalikobotError.invalidResponse);
+  }
+  return null;
+}
+
+Future<Uint8List> _readLimited(
+  http.StreamedResponse response,
+  int limit,
+) async {
+  final builder = BytesBuilder(copy: false);
+  await for (final chunk in response.stream) {
+    builder.add(chunk);
+    if (builder.length > limit) {
+      throw ResponseLimitException(
+        'Balíkobot response exceeds $limit bytes',
+        statusCode: response.statusCode,
+        headers: response.headers,
+      );
+    }
+  }
+  return builder.takeBytes();
+}
+
+String? _labelMediaType(String? header) {
+  if (header == null) {
+    return null;
+  }
+  final parts = header.split(';');
+  final mediaType = parts.first.trim().toLowerCase();
+  for (final parameter in parts.skip(1)) {
+    final trimmed = parameter.trim();
+    if (trimmed.isEmpty) {
+      continue;
+    }
+    if (trimmed.indexOf('=') <= 0) {
+      return null;
+    }
+  }
+  return mediaType;
+}
+
+bool _hasPrefix(Uint8List bytes, String prefix) {
+  if (bytes.length < prefix.length) {
+    return false;
+  }
+  for (var index = 0; index < prefix.length; index++) {
+    if (bytes[index] != prefix.codeUnitAt(index)) {
+      return false;
+    }
+  }
+  return true;
 }
 
 class _BranchWire {
@@ -266,13 +688,42 @@ bool _validCoordinates(double latitude, double longitude) =>
     (latitude != 0 || longitude != 0);
 
 bool _validBranchField(String value, int maximum) =>
+    _validUtf8(value) &&
     value.runes.length <= maximum &&
     !value.contains('\r') &&
     !value.contains('\n') &&
     !value.contains('\x00');
 
+bool _validUtf8(String value) {
+  for (var index = 0; index < value.length; index++) {
+    final code = value.codeUnitAt(index);
+    if (code >= 0xd800 && code <= 0xdbff) {
+      if (index + 1 >= value.length) {
+        return false;
+      }
+      final next = value.codeUnitAt(index + 1);
+      if (next < 0xdc00 || next > 0xdfff) {
+        return false;
+      }
+      index++;
+    } else if (code >= 0xdc00 && code <= 0xdfff) {
+      return false;
+    }
+  }
+  return true;
+}
+
 const int _branchFieldLimit = 200;
 const int _zipLimit = 16;
+const int _addFieldLimit = 255;
+const int _identifierLimit = 100;
+const int _labelResponseLimit = 4 << 20;
+const int _trackReferenceModulus = 10000000000;
+const String _pdfMediaType = 'application/pdf';
+const String _zplMediaType = 'application/zpl';
+const String _pdfMagicPrefix = '%PDF-';
+const String _zplMagicPrefix = '^X';
 final RegExp _servicePattern = RegExp(r'^[A-Za-z0-9]{1,16}$');
 final RegExp _branchIdPattern = RegExp(r'^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$');
+final RegExp _eidPattern = RegExp(r'^[A-Za-z0-9-]{8,40}$');
 final RegExp _statusPattern = RegExp(r'^[0-9]{1,3}$');
