@@ -3,7 +3,7 @@
 /// Every client failure maps to one of these codes so the caller can decide
 /// whether a retry can succeed or the request is permanently refused.
 enum BalikobotError {
-  /// The arguments were rejected locally before any network call.
+  /// The client rejects the arguments locally before any network call.
   invalidRequest,
 
   /// The provider permanently refused the request or the supplied data.
@@ -16,7 +16,8 @@ enum BalikobotError {
   /// The provider reported that the resource has no data yet.
   notFound,
 
-  /// A mutating call may have reached the provider and its outcome is unknown.
+  /// A mutating call can reach the provider before the failure, so the
+  /// outcome is unknown.
   ambiguous,
 
   /// The provider answer violates the protocol.
@@ -35,7 +36,7 @@ class BalikobotException implements Exception {
   /// A human-readable description of the failure.
   final String message;
 
-  /// The provider retry hint of a retryable failure, when one was sent.
+  /// The provider retry hint of a retryable failure, when present.
   final Duration? retryAfter;
 
   /// Returns a string representation of this exception.

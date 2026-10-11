@@ -134,7 +134,7 @@ class Country {
 
   /// Normalizes [value] and returns it as a [Country].
   ///
-  /// The value is trimmed and uppercased. A malformed value throws a
+  /// This method trims and uppercases the value. A malformed value throws a
   /// [FormatException].
   static Country fromString(String value) {
     final normalized = value.trim().toUpperCase();

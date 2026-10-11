@@ -39,34 +39,34 @@ class AddPackageRequest {
 
   /// The recipient name.
   ///
-  /// [recName] or [recFirm] must be set.
+  /// Every request must include [recName] or [recFirm].
   final String recName;
 
   /// The recipient company.
   ///
-  /// [recName] or [recFirm] must be set.
+  /// Every request must include [recName] or [recFirm].
   final String recFirm;
 
-  /// The recipient street. It is required.
+  /// The recipient street. Every request must include it.
   final String recStreet;
 
-  /// The recipient city. It is required.
+  /// The recipient city. Every request must include it.
   final String recCity;
 
-  /// The recipient postal code. It is required.
+  /// The recipient postal code. Every request must include it.
   final String recZip;
 
-  /// The ISO 3166-1 alpha-2 destination country. It is required.
+  /// The ISO 3166-1 alpha-2 destination country. Every request must include it.
   final Country recCountry;
 
   /// The recipient phone.
   ///
-  /// [recPhone] or [recEmail] must be set.
+  /// Every request must include [recPhone] or [recEmail].
   final String recPhone;
 
   /// The recipient email.
   ///
-  /// [recPhone] or [recEmail] must be set.
+  /// Every request must include [recPhone] or [recEmail].
   final String recEmail;
 
   /// The pickup branch reference for branch delivery.
@@ -104,13 +104,13 @@ class AddPackageRequest {
   /// The cash-on-delivery currency.
   ///
   /// Balíkobot carriers validate this field even without a COD amount, so
-  /// `CZK` or `EUR` is required on every ADD.
+  /// the client requires `CZK` or `EUR` on every ADD.
   final Currency codCurrency;
 
   /// The cash-on-delivery variable symbol.
   ///
-  /// It must be set exactly when [codPrice] is positive and must be below
-  /// 10000000000.
+  /// The client requires it exactly when [codPrice] is positive. Its value
+  /// must be below 10000000000.
   final int? vs;
 
   /// Returns the JSON body of this package.

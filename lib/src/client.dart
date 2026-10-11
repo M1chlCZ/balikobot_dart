@@ -29,9 +29,9 @@ part 'response.dart';
 class BalikobotClient {
   /// Validates [config] and creates a client.
   ///
-  /// The user and the API key must not be empty, the base URL must be an
-  /// absolute URL, and the `https` scheme is mandatory unless the host is a
-  /// loopback address. An invalid configuration throws an [ArgumentError].
+  /// The user and the API key must not be empty. The base URL must be an
+  /// absolute URL. It must use `https`, unless the host is a loopback
+  /// address. An invalid configuration throws an [ArgumentError].
   BalikobotClient(Config config) {
     final user = config.user.trim();
     if (user.isEmpty || utf8.encode(user).length > _userLimit) {
@@ -93,14 +93,14 @@ class BalikobotClient {
 
   /// The wrapped HTTP client used for every request.
   ///
-  /// Exposed for tests that verify transport behavior.
+  /// The client exposes this getter for tests that verify transport behavior.
   @visibleForTesting
   http.Client get httpClient => _httpClient;
 
   /// Releases the resources held by this client.
   ///
-  /// The HTTP client owned by this instance is closed; an injected
-  /// [Config.httpClient] is never closed. Repeated calls are safe.
+  /// This method closes the HTTP client owned by this instance. It never
+  /// closes an injected [Config.httpClient]. Repeated calls are safe.
   void close() {
     if (_closed) {
       return;
@@ -113,13 +113,13 @@ class BalikobotClient {
   /// Calls the BRANCHES method and returns the branches of one [carrier]
   /// service in one [country].
   ///
-  /// The route depends on the carrier: the selected carriers use the combined
-  /// service and country segments, Zásilkovna uses the country-only route, and
-  /// the remaining carriers use the service-only route with a client-side
-  /// country filter. An invalid [carrier], [service] or [country] throws a
-  /// [BalikobotException] with [BalikobotError.invalidRequest] before any
-  /// request is sent. [timeout] overrides the configured request timeout for
-  /// this call.
+  /// The route depends on the carrier. The selected carriers use the combined
+  /// service and country segments. Zásilkovna uses the country-only route. The
+  /// remaining carriers use the service-only route with a client-side country
+  /// filter. An invalid [carrier], [service] or [country] throws a
+  /// [BalikobotException] with [BalikobotError.invalidRequest] before the
+  /// client sends any request. [timeout] overrides the configured request
+  /// timeout for this call.
   Future<List<Branch>> branches(
     Carrier carrier,
     String service,
@@ -180,12 +180,12 @@ class BalikobotClient {
 
   /// Calls the ADD method with one package.
   ///
-  /// ADD is idempotent on [AddPackageRequest.eid]: a repeated request with an
-  /// already stored EID returns status 208 together with the original record,
-  /// which maps to a successful result. An invalid [carrier] or [request]
-  /// throws a [BalikobotException] with [BalikobotError.invalidRequest] before
-  /// any request is sent. [timeout] overrides the configured request timeout
-  /// for this call.
+  /// ADD is idempotent on [AddPackageRequest.eid]. A repeated request with an
+  /// already stored EID returns status 208 and the original record. The client
+  /// maps this answer to a successful result. An invalid [carrier] or
+  /// [request] throws a [BalikobotException] with
+  /// [BalikobotError.invalidRequest] before the client sends any request.
+  /// [timeout] overrides the configured request timeout for this call.
   Future<AddPackageResult> addPackage(
     Carrier carrier,
     AddPackageRequest request, {
@@ -282,14 +282,14 @@ class BalikobotClient {
   }
 
   /// Calls the OVERVIEW method, which lists the packages of a [carrier] that
-  /// have not been closed by ORDER yet.
+  /// ORDER has not closed yet.
   ///
   /// [matchEid] names the single entry whose integrity is required for
-  /// reconciliation: a malformed entry with a different EID is skipped, while
-  /// a malformed matching entry fails the call. An invalid [carrier] throws a
-  /// [BalikobotException] with [BalikobotError.invalidRequest] before any
-  /// request is sent. [timeout] overrides the configured request timeout for
-  /// this call.
+  /// reconciliation. The call skips a malformed entry with a different EID. A
+  /// malformed matching entry fails the call. An invalid [carrier] throws a
+  /// [BalikobotException] with [BalikobotError.invalidRequest] before the
+  /// client sends any request. [timeout] overrides the configured request
+  /// timeout for this call.
   Future<List<OverviewPackage>> overview(
     Carrier carrier,
     String matchEid, {
@@ -363,8 +363,8 @@ class BalikobotClient {
   /// ORDER yet.
   ///
   /// An invalid [carrier] or [packageId] throws a [BalikobotException] with
-  /// [BalikobotError.invalidRequest] before any request is sent. [timeout]
-  /// overrides the configured request timeout for this call.
+  /// [BalikobotError.invalidRequest] before the client sends any request.
+  /// [timeout] overrides the configured request timeout for this call.
   Future<String> labels(
     Carrier carrier,
     String packageId, {
@@ -413,12 +413,12 @@ class BalikobotClient {
 
   /// Retrieves the label URL of an already closed ORDER.
   ///
-  /// The returned URL is accepted only when the response confirms both the
-  /// requested [orderId] and the membership of the requested [packageId]. An
-  /// invalid [carrier], [orderId] or [packageId] throws a
-  /// [BalikobotException] with [BalikobotError.invalidRequest] before any
-  /// request is sent. [timeout] overrides the configured request timeout for
-  /// this call.
+  /// The client accepts the returned URL only when the response confirms both
+  /// the requested [orderId] and the membership of the requested [packageId].
+  /// An invalid [carrier], [orderId] or [packageId] throws a
+  /// [BalikobotException] with [BalikobotError.invalidRequest] before the
+  /// client sends any request. [timeout] overrides the configured request
+  /// timeout for this call.
   Future<String> orderViewLabels(
     Carrier carrier,
     String orderId,
@@ -466,12 +466,12 @@ class BalikobotClient {
 
   /// Fetches a provider label URL server-to-server.
   ///
-  /// The body is read once with a hard 4 MiB limit and validated against the
-  /// declared media type and the configured label host rules. The returned
-  /// bytes and media type are owned by the caller. An invalid [labelUrl]
+  /// The client reads the body once with a hard 4 MiB limit. It validates the
+  /// body against the declared media type and the configured label host rules.
+  /// The caller owns the returned bytes and media type. An invalid [labelUrl]
   /// throws a [BalikobotException] with [BalikobotError.invalidRequest] before
-  /// any request is sent. [timeout] overrides the configured request timeout
-  /// for this call.
+  /// the client sends any request. [timeout] overrides the configured request
+  /// timeout for this call.
   Future<(Uint8List, String)> downloadLabel(
     String labelUrl, {
     Duration? timeout,
@@ -537,9 +537,9 @@ class BalikobotClient {
   /// HTTP status 404 means that the carrier has no tracking data yet and
   /// throws a [BalikobotException] with [BalikobotError.notFound]. An invalid
   /// [carrier] or [carrierId] throws a [BalikobotException] with
-  /// [BalikobotError.invalidRequest] before any request is sent. The call is
-  /// read-only, so transport failures are safe to retry. [timeout] overrides
-  /// the configured request timeout for this call.
+  /// [BalikobotError.invalidRequest] before the client sends any request. The
+  /// call is read-only, so transport failures are safe to retry. [timeout]
+  /// overrides the configured request timeout for this call.
   Future<TrackStatusResult> trackStatus(
     Carrier carrier,
     String carrierId, {
@@ -632,8 +632,8 @@ class BalikobotClient {
   /// ORDER is idempotent on [packageId]: a repeated closure returns body
   /// status 208 with the original order id. An invalid [carrier] or
   /// [packageId] throws a [BalikobotException] with
-  /// [BalikobotError.invalidRequest] before any request is sent. [timeout]
-  /// overrides the configured request timeout for this call.
+  /// [BalikobotError.invalidRequest] before the client sends any request.
+  /// [timeout] overrides the configured request timeout for this call.
   Future<OrderResult> orderBatch(
     Carrier carrier,
     String packageId, {
@@ -712,12 +712,12 @@ class BalikobotClient {
   /// Calls the DROP method for one package that has not entered ORDER.
   ///
   /// A body status 404 means that the package is already gone and the call
-  /// succeeds. A body status 405 marks a package that was already handed to
-  /// the batch and throws a [BalikobotException] with
+  /// succeeds. A body status 405 marks a package that already entered the
+  /// batch and throws a [BalikobotException] with
   /// [BalikobotError.rejected]. An invalid [carrier] or [packageId] throws a
-  /// [BalikobotException] with [BalikobotError.invalidRequest] before any
-  /// request is sent. [timeout] overrides the configured request timeout for
-  /// this call.
+  /// [BalikobotException] with [BalikobotError.invalidRequest] before the
+  /// client sends any request. [timeout] overrides the configured request
+  /// timeout for this call.
   Future<void> dropPackage(
     Carrier carrier,
     String packageId, {
@@ -791,11 +791,11 @@ class BalikobotClient {
   /// Calls the ORDERPICKUP method and books one physical collection.
   ///
   /// The supported [carrier] values are DPD, DPDCZ and PPL. DPD and DPDCZ take
-  /// the collection address from the carrier configuration and always report
-  /// a confirmed booking; PPL additionally requires a provider confirmation
-  /// and pickup reference. An invalid [request] or an unsupported [carrier]
-  /// throws a [BalikobotException] with [BalikobotError.rejected] before any
-  /// request is sent. [timeout] overrides the configured request timeout for
+  /// the collection address from the carrier configuration. They always report
+  /// a confirmed booking. PPL also requires a provider confirmation and a
+  /// pickup reference. An invalid [request] or an unsupported [carrier] throws
+  /// a [BalikobotException] with [BalikobotError.rejected] before the client
+  /// sends any request. [timeout] overrides the configured request timeout for
   /// this call.
   Future<PickupResult> orderPickup(
     Carrier carrier,
@@ -878,8 +878,8 @@ class BalikobotClient {
   ///
   /// When the provider reports that parcel shipping is inactive, the service
   /// list is empty. An invalid [carrier] throws a [BalikobotException] with
-  /// [BalikobotError.invalidRequest] before any request is sent. [timeout]
-  /// overrides the configured request timeout for this call.
+  /// [BalikobotError.invalidRequest] before the client sends any request.
+  /// [timeout] overrides the configured request timeout for this call.
   Future<capabilities.ActivatedServices> activatedServices(
     Carrier carrier, {
     Duration? timeout,
@@ -908,11 +908,11 @@ class BalikobotClient {
   /// Calls the COUNTRIES4SERVICE method of [carrier] and returns the supported
   /// destination countries per service.
   ///
-  /// Every country sent by the provider is kept, with surrounding whitespace
-  /// trimmed and letters upper-cased. An invalid [carrier] throws a
-  /// [BalikobotException] with [BalikobotError.invalidRequest] before any
-  /// request is sent. [timeout] overrides the configured request timeout for
-  /// this call.
+  /// The client keeps every country that the provider sends. It trims
+  /// surrounding whitespace and upper-cases the letters. An invalid [carrier]
+  /// throws a [BalikobotException] with [BalikobotError.invalidRequest] before
+  /// the client sends any request. [timeout] overrides the configured request
+  /// timeout for this call.
   Future<List<capabilities.ServiceCountries>> countries(
     Carrier carrier, {
     Duration? timeout,
@@ -959,8 +959,8 @@ class BalikobotClient {
   ///
   /// A carrier without the optional dictionary returns an empty list. An
   /// invalid [carrier] throws a [BalikobotException] with
-  /// [BalikobotError.invalidRequest] before any request is sent. [timeout]
-  /// overrides the configured request timeout for this call.
+  /// [BalikobotError.invalidRequest] before the client sends any request.
+  /// [timeout] overrides the configured request timeout for this call.
   Future<List<capabilities.ServiceCOD>> cod(
     Carrier carrier, {
     Duration? timeout,
@@ -1009,9 +1009,9 @@ class BalikobotClient {
   /// Without [scope] the call discovers every carrier of the account; an
   /// explicit empty scope discovers none. Every requested carrier must belong
   /// to the account, otherwise the call throws a [BalikobotException] with
-  /// [BalikobotError.invalidResponse]. The returned destinations are
-  /// restricted to EU countries, matching the reference integration. [timeout]
-  /// overrides the configured request timeout for this call.
+  /// [BalikobotError.invalidResponse]. The call restricts the returned
+  /// destinations to EU countries, matching the reference integration.
+  /// [timeout] overrides the configured request timeout for this call.
   Future<List<capabilities.ContractedCarrier>> carrierCapabilities({
     List<Carrier>? scope,
     Duration? timeout,
@@ -1149,9 +1149,9 @@ class BalikobotClient {
 
 /// Derives the branch id that ADD expects from a stored branch of a carrier.
 ///
-/// Česká pošta and Slovenská pošta use the branch ZIP without spaces, the
-/// Uloženka `CP_NP` service does the same, PPL strips the `KM` prefix, and
-/// every other carrier uses the stored branch id unchanged.
+/// Česká pošta and Slovenská pošta use the branch ZIP without spaces. The
+/// Uloženka `CP_NP` service does the same. PPL strips the `KM` prefix. Every
+/// other carrier uses the stored branch id unchanged.
 String resolveBranchId(
   Carrier carrier,
   String service,

@@ -50,7 +50,7 @@ class Carrier {
 
   /// Normalizes [value] and returns it as a [Carrier].
   ///
-  /// The value is trimmed and lowercased. A malformed value throws a
+  /// This method trims and lowercases the value. A malformed value throws a
   /// [FormatException].
   static Carrier fromString(String value) {
     final normalized = value.trim().toLowerCase();

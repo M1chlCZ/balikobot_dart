@@ -4,8 +4,8 @@ import 'package:http/http.dart' as http;
 class Config {
   /// Creates a configuration.
   ///
-  /// [user] and [apiKey] are required and are sent as the HTTP Basic
-  /// credentials. [baseUrl] defaults to the production Balíkobot API v2
+  /// [user] and [apiKey] are required. The client sends them as the HTTP
+  /// Basic credentials. [baseUrl] defaults to the production Balíkobot API v2
   /// endpoint. [timeout] defaults to 30 seconds and [maxResponseBytes] to
   /// 8 MiB.
   const Config({
@@ -21,7 +21,7 @@ class Config {
 
   /// The API root, for example `https://apiv2.balikobot.cz`.
   ///
-  /// Only the loopback host of a local test server may use the `http` scheme.
+  /// Only the loopback host of a local test server can use the `http` scheme.
   final String baseUrl;
 
   /// The API user, sent as the HTTP Basic user name.
@@ -54,6 +54,6 @@ class Config {
   /// Optionally enables account-mode verification before mutating calls.
   ///
   /// When set, the client requires the provider `live_account` flag to equal
-  /// this value. When `null`, no account-mode check is performed.
+  /// this value. When `null`, the client performs no account-mode check.
   final bool? liveAccount;
 }

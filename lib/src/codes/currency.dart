@@ -50,7 +50,7 @@ class Currency {
 
   /// Normalizes [value] and returns it as a [Currency].
   ///
-  /// The value is trimmed and uppercased. A malformed value throws a
+  /// This method trims and uppercases the value. A malformed value throws a
   /// [FormatException].
   static Currency fromString(String value) {
     final normalized = value.trim().toUpperCase();

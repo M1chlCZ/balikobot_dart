@@ -1,3 +1,7 @@
+## 0.1.1
+
+- Documentation and internal cleanup.
+
 ## 0.1.0
 
 - Initial release: a parity port of balikobot-go v0.2.0.
