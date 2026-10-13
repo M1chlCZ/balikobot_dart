@@ -1,4 +1,4 @@
-## [Unreleased]
+## [0.2.0] - 2026-10-13
 
 - Added `downloadBatchLabels`: requests and downloads the labels of one to
   1000 packages in one call. A single package returns a PDF or ZPL body and
