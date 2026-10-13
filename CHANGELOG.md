@@ -1,3 +1,12 @@
+## [Unreleased]
+
+- Added `downloadBatchLabels`: requests and downloads the labels of one to
+  1000 packages in one call. A single package returns a PDF or ZPL body and
+  several packages return a ZIP archive; the method returns the raw body with
+  the validated media type.
+- Added `parseTrackingNotifications` and the `TrackingNotification` model: parse
+  the JSON body of a tracking webhook into typed notifications.
+
 ## 0.1.1
 
 - Documentation and internal cleanup.

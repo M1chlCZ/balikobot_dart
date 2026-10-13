@@ -20,6 +20,7 @@ import 'models/shipment.dart';
 import 'models/tracking.dart';
 
 part 'response.dart';
+part 'webhook.dart';
 
 /// A client for the Balíkobot API v2.
 ///
@@ -373,42 +374,7 @@ class BalikobotClient {
     if (!carrier.isValid || !_validPackageId(packageId)) {
       throw _error(BalikobotError.invalidRequest);
     }
-    final RestResponse response;
-    try {
-      response = await _sendRequest(
-        'POST',
-        '/${carrier.value}/labels',
-        body: {
-          'package_ids': [packageId],
-        },
-        timeout: timeout,
-      );
-    } on _TransportFailure {
-      throw _error(BalikobotError.unavailable);
-    } on ResponseLimitException {
-      throw _error(BalikobotError.unavailable);
-    }
-    final lookupError = _labelLookupStatus(response);
-    if (lookupError != null) {
-      throw lookupError;
-    }
-    final _LabelsResponse payload;
-    try {
-      payload = _labelsResponse(_decode(response));
-    } on FormatException {
-      throw _error(BalikobotError.invalidResponse);
-    }
-    if (payload.status == null) {
-      throw _error(BalikobotError.invalidResponse);
-    }
-    final statusError = _topLevelStatusError(payload.status);
-    if (statusError != null) {
-      throw statusError;
-    }
-    if (!_validLabelUrl(payload.labelsUrl)) {
-      throw _error(BalikobotError.invalidResponse);
-    }
-    return payload.labelsUrl;
+    return _lookupLabelsUrl(carrier, [packageId], timeout: timeout);
   }
 
   /// Retrieves the label URL of an already closed ORDER.
@@ -479,6 +445,49 @@ class BalikobotClient {
     if (!_validLabelUrl(labelUrl)) {
       throw _error(BalikobotError.invalidRequest);
     }
+    return _fetchLabelBody(labelUrl, multiple: false, timeout: timeout);
+  }
+
+  /// Downloads fresh labels of one or more packages that have not entered
+  /// ORDER yet in one step.
+  ///
+  /// A single entry in [packageIds] returns a PDF or ZPL body; several entries
+  /// return a ZIP archive. The request accepts at most 1000 package ids. The
+  /// client reads the body once with a hard 4 MiB limit. It validates the body
+  /// against the declared media type and the configured label host rules. The
+  /// caller owns the returned bytes and media type. An invalid [carrier], an
+  /// empty [packageIds], more than 1000 entries or an invalid package id
+  /// throws a [BalikobotException] with [BalikobotError.invalidRequest] before
+  /// the client sends any request. [timeout] overrides the configured request
+  /// timeout for this call.
+  Future<(Uint8List, String)> downloadBatchLabels(
+    Carrier carrier,
+    List<String> packageIds, {
+    Duration? timeout,
+  }) async {
+    if (!carrier.isValid ||
+        packageIds.isEmpty ||
+        packageIds.length > _labelsPackageLimit ||
+        packageIds.any((packageId) => !_validPackageId(packageId))) {
+      throw _error(BalikobotError.invalidRequest);
+    }
+    final labelUrl = await _lookupLabelsUrl(
+      carrier,
+      packageIds,
+      timeout: timeout,
+    );
+    return _fetchLabelBody(
+      labelUrl,
+      multiple: packageIds.length > 1,
+      timeout: timeout,
+    );
+  }
+
+  Future<(Uint8List, String)> _fetchLabelBody(
+    String labelUrl, {
+    required bool multiple,
+    Duration? timeout,
+  }) async {
     final request = http.Request('GET', Uri.parse(labelUrl));
     final http.StreamedResponse response;
     try {
@@ -501,7 +510,8 @@ class BalikobotClient {
       throw _error(BalikobotError.invalidResponse);
     }
     final mediaType = _labelMediaType(response.headers['content-type']);
-    if (mediaType != _pdfMediaType && mediaType != _zplMediaType) {
+    final prefix = _labelPrefix(mediaType, multiple);
+    if (prefix == null) {
       throw _error(BalikobotError.invalidResponse);
     }
     final Uint8List bytes;
@@ -519,16 +529,51 @@ class BalikobotClient {
     } on http.ClientException {
       throw _error(BalikobotError.unavailable);
     }
-    if (bytes.isEmpty) {
-      throw _error(BalikobotError.invalidResponse);
-    }
-    if (mediaType == _pdfMediaType && !_hasPrefix(bytes, _pdfMagicPrefix)) {
-      throw _error(BalikobotError.invalidResponse);
-    }
-    if (mediaType == _zplMediaType && !_hasPrefix(bytes, _zplMagicPrefix)) {
+    if (bytes.isEmpty || !_hasPrefix(bytes, prefix)) {
       throw _error(BalikobotError.invalidResponse);
     }
     return (bytes, mediaType!);
+  }
+
+  Future<String> _lookupLabelsUrl(
+    Carrier carrier,
+    List<String> packageIds, {
+    Duration? timeout,
+  }) async {
+    final RestResponse response;
+    try {
+      response = await _sendRequest(
+        'POST',
+        '/${carrier.value}/labels',
+        body: {'package_ids': packageIds},
+        timeout: timeout,
+      );
+    } on _TransportFailure {
+      throw _error(BalikobotError.unavailable);
+    } on ResponseLimitException {
+      throw _error(BalikobotError.unavailable);
+    }
+    final lookupError = _labelLookupStatus(response);
+    if (lookupError != null) {
+      throw lookupError;
+    }
+    final _LabelsResponse payload;
+    try {
+      payload = _labelsResponse(_decode(response));
+    } on FormatException {
+      throw _error(BalikobotError.invalidResponse);
+    }
+    if (payload.status == null) {
+      throw _error(BalikobotError.invalidResponse);
+    }
+    final statusError = _topLevelStatusError(payload.status);
+    if (statusError != null) {
+      throw statusError;
+    }
+    if (!_validLabelUrl(payload.labelsUrl)) {
+      throw _error(BalikobotError.invalidResponse);
+    }
+    return payload.labelsUrl;
   }
 
   /// Calls the TRACKSTATUS method for one carrier tracking number.

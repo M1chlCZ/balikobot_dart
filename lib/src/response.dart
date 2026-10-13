@@ -698,6 +698,19 @@ bool _hasPrefix(Uint8List bytes, String prefix) {
   return true;
 }
 
+String? _labelPrefix(String? mediaType, bool multiple) {
+  switch (mediaType) {
+    case _pdfMediaType:
+      return multiple ? null : _pdfMagicPrefix;
+    case _zplMediaType:
+      return multiple ? null : _zplMagicPrefix;
+    case _zipMediaType:
+      return multiple ? _zipMagicPrefix : null;
+    default:
+      return null;
+  }
+}
+
 class _BranchWire {
   const _BranchWire({
     required this.type,
@@ -1594,6 +1607,8 @@ const int _zipLimit = 16;
 const int _addFieldLimit = 255;
 const int _identifierLimit = 100;
 const int _labelResponseLimit = 4 << 20;
+const int _labelsPackageLimit = 1000;
+const int _trackingBatchLimit = 1000;
 const int _trackReferenceModulus = 10000000000;
 const int _pickupPackageLimit = 10000;
 const int _pickupWeightLimit = 100000;
@@ -1614,8 +1629,10 @@ final RegExp _capabilityPricePattern = RegExp(
 );
 const String _pdfMediaType = 'application/pdf';
 const String _zplMediaType = 'application/zpl';
+const String _zipMediaType = 'application/zip';
 const String _pdfMagicPrefix = '%PDF-';
 const String _zplMagicPrefix = '^X';
+const String _zipMagicPrefix = 'PK';
 final RegExp _servicePattern = RegExp(r'^[A-Za-z0-9]{1,16}$');
 final RegExp _branchIdPattern = RegExp(r'^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$');
 final RegExp _eidPattern = RegExp(r'^[A-Za-z0-9-]{8,40}$');

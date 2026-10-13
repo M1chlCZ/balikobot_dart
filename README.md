@@ -75,6 +75,8 @@ The `example/main.dart` file holds the same code.
 | `labels` | `POST /{carrier}/labels` | Gets a fresh label URL for one package |
 | `orderViewLabels` | `GET /{carrier}/orderview/{order_id}` | Gets the label URL of a closed order |
 | `downloadLabel` | `GET` the label URL | Downloads the label body |
+| `downloadBatchLabels` | `POST /{carrier}/labels` and label download | Downloads the labels of one to 1000 packages |
+| `parseTrackingNotifications` | none | Parses the raw body of a tracking webhook |
 | `trackStatus` | `POST /{carrier}/trackstatus` | Reads the tracking status of one package |
 | `orderBatch` | `POST /{carrier}/order` | Hands one package to the carrier batch |
 | `dropPackage` | `POST /{carrier}/drop` | Removes one package before ORDER |
@@ -148,12 +150,30 @@ capability calls return `unavailable` without a hint.
 
 The client sends no automatic retry. You control the retry policy.
 
+## Tracking webhooks
+
+`parseTrackingNotifications` parses the raw JSON body of a Balíkobot tracking
+webhook. The body can be one notification object or an array of up to 1000
+objects; an empty array returns an empty list. Every entry must identify the
+package through `package_id`, `eid` or `carrier_id`. Every entry must also
+carry a decimal `status_id` or `status_id_v2` and a description in `name` or
+`status_text`. A malformed body throws a `BalikobotException` with
+`BalikobotError.invalidResponse`.
+
+```dart
+final notifications = parseTrackingNotifications(request.body);
+for (final notification in notifications) {
+  print('${notification.statusId}: ${notification.statusText}');
+}
+```
+
 ## Response limits
 
 The client reads every JSON body with a hard limit of 8 MiB. Set
-`Config.maxResponseBytes` to change the limit. Label downloads use a fixed
-limit of 4 MiB. The client refuses redirects. It compares the response
-`Content-Type` with the expected media type before it decodes the body.
+`Config.maxResponseBytes` to change the limit. Single and batch label
+downloads use a fixed limit of 4 MiB. The client refuses redirects. It compares
+the response `Content-Type` with the expected media type before it decodes the
+body.
 
 ## Account mode
 
