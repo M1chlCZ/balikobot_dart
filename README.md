@@ -1,9 +1,10 @@
 # balikobot_dart
 
-A Dart client for the Balíkobot shipping API v2: packages, labels, tracking,
-pickups, and carrier capabilities. The client authenticates with HTTP Basic
-credentials, validates every answer, and maps every failure to one sentinel
-error. The package uses the `http` and `json_rest_client` libraries.
+`balikobot_dart` is a Dart client for the Balíkobot shipping API v2. It covers
+packages, labels, tracking, pickups and carrier capabilities. The client
+authenticates with HTTP Basic credentials, validates every response, and maps
+every failure to one sentinel error. It uses the `http` and `json_rest_client`
+libraries.
 
 ## Install
 
@@ -16,9 +17,9 @@ scheme. Every other base URL must use `https`.
 
 ## Quick start
 
-Create a client with your API user and API key. The client sends the
-credentials as HTTP Basic authentication. Then add a package, get a label URL,
-and read the tracking status.
+Create a client with your API user and API key; the client sends them as HTTP
+Basic authentication. Then add a package, get a label URL and read the tracking
+status.
 
 ```dart
 import 'package:balikobot_dart/balikobot_dart.dart';
@@ -92,7 +93,7 @@ The `example/main.dart` file holds the same code.
 
 ## Codes
 
-Carrier, currency, and country values are typed, not plain strings.
+Carrier, currency and country values are typed, not plain strings.
 
 | Type | Format | Common constants |
 | --- | --- | --- |
@@ -101,9 +102,9 @@ Carrier, currency, and country values are typed, not plain strings.
 | `Country` | ISO 3166-1 alpha-2 `^[A-Z]{2}$` | EU member states plus `gb`, `ch`, `no`, `isIceland`, `li`, `ua`, `rs`, `ba`, `me`, `mk`, `al`, `tr`, `us`, `ca` |
 
 Every type has a `fromString` function and an `isValid` getter. `fromString`
-trims the value, normalizes the case, and accepts any well-formed code. A
+trims the value, normalises the case and accepts any well-formed code. A
 malformed value throws a `FormatException`. Use `fromString` for a value that
-has no constant, so custom carriers, currencies, and countries work:
+has no constant, so custom carriers, currencies and countries work:
 
 ```dart
 final custom = Carrier.fromString('MyCarrier99');
@@ -147,7 +148,7 @@ try {
 }
 ```
 
-`orderPickup` maps HTTP 429 to `rejected`. The branch, label download, and
+`orderPickup` maps HTTP 429 to `rejected`. The branch, label download and
 capability calls return `unavailable` without a hint.
 
 The client sends no automatic retry. You control the retry policy.
@@ -170,9 +171,9 @@ need the media type.
 
 `parseTrackingNotifications` parses the raw JSON body of a Balíkobot tracking
 webhook. The body can be one notification object or an array of up to 1000
-objects; an empty array returns an empty list. Every entry must identify the
-package through `package_id`, `eid` or `carrier_id`. Every entry must also
-carry a decimal `status_id` or `status_id_v2` and a description in `name` or
+objects; an empty array returns an empty list. Each entry must identify the
+package through `package_id`, `eid` or `carrier_id`. Each entry must also carry
+a decimal `status_id` or `status_id_v2` and a description in `name` or
 `status_text`. A malformed body throws a `BalikobotException` with
 `BalikobotError.invalidResponse`.
 
@@ -206,7 +207,7 @@ lets a pending interval finish before the stream closes.
 
 The client reads every JSON body with a hard limit of 8 MiB. Set
 `Config.maxResponseBytes` to change the limit. Single and batch label
-downloads use a fixed limit of 4 MiB. The client refuses redirects. It compares
+downloads use a fixed limit of 4 MiB. The client refuses redirects and compares
 the response `Content-Type` with the expected media type before it decodes the
 body.
 
@@ -215,16 +216,16 @@ body.
 Set `Config.liveAccount` to `true` or `false` to verify the account before each
 non-GET call. The client calls WHOAMI and compares the `live_account` flag. A
 mismatch blocks the write before the client sends it. A successful result stays
-valid for five minutes. If `Config.liveAccount` is null, the client skips this
+valid for five minutes. If `Config.liveAccount` is null, the client skips the
 check.
 
 ## Label hosts
 
 The client accepts label URLs only from `pdf.balikobot.cz` and the
 `*.balikobot.cz` subdomains. It also accepts the base URL origin of a loopback
-test server. Set `Config.labelHosts` to replace the
-default allowlist with other hosts. A leading dot selects a subdomain suffix
-match; it does not match the bare domain.
+test server. Set `Config.labelHosts` to replace the default allowlist with
+other hosts. A leading dot selects a subdomain suffix match; it does not match
+the bare domain.
 
 ## Development
 
@@ -235,7 +236,7 @@ dart analyze --fatal-infos
 dart test
 ```
 
-The tests use mocked HTTP clients. They use no real credentials and no external
+The tests use mocked HTTP clients, with no real credentials and no external
 network.
 
 ## Support
@@ -245,6 +246,6 @@ If this project helps you, you can support its development.
 [![Support me on Ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/m1chl)
 [![Buy me a coffee](https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png)](https://buymeacoffee.com/xdujifyzvt)
 
-## License
+## Licence
 
 MIT. See [LICENSE](LICENSE).
