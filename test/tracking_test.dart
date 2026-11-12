@@ -179,4 +179,60 @@ void main() {
       );
     });
   });
+
+  group('trackStatusStream', () {
+    test('emits changed statuses and stops when asked', () async {
+      var calls = 0;
+      final client = buildClient(
+        MockClient((request) async {
+          calls++;
+          final statusId = calls <= 2 ? 1 : 1.2;
+          final name = calls <= 2 ? 'Přijato' : 'Doručeno';
+          return jsonResponse({
+            'status': 200,
+            'packages': [
+              {'carrier_id': 'TRACK-1', 'status_id': statusId, 'name': name},
+            ],
+          });
+        }),
+      );
+      addTearDown(client.close);
+
+      final results = await client
+          .trackStatusStream(
+            Carrier.ppl,
+            'TRACK-1',
+            interval: const Duration(milliseconds: 1),
+            stopWhen: (result) => result.statusId == '1.2',
+          )
+          .toList();
+
+      expect(results.map((result) => result.statusId), ['1', '1.2']);
+      expect(calls, 3);
+    });
+
+    test('propagates poll errors', () async {
+      final client = buildClient(
+        MockClient((request) async => http.Response('{}', 404)),
+      );
+      addTearDown(client.close);
+
+      await expectLater(
+        client
+            .trackStatusStream(
+              Carrier.ppl,
+              'TRACK-1',
+              interval: const Duration(milliseconds: 1),
+            )
+            .first,
+        throwsA(
+          isA<BalikobotException>().having(
+            (error) => error.code,
+            'code',
+            BalikobotError.notFound,
+          ),
+        ),
+      );
+    });
+  });
 }

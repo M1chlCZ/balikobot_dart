@@ -448,6 +448,28 @@ class BalikobotClient {
     return _fetchLabelBody(labelUrl, multiple: false, timeout: timeout);
   }
 
+  /// Downloads the label of one package as a PDF.
+  ///
+  /// The method looks up the label URL with [labels] and downloads it with
+  /// [downloadLabel]. It returns the PDF bytes and throws a
+  /// [BalikobotException] with [BalikobotError.invalidResponse] when the
+  /// provider returns another media type, such as ZPL or a ZIP archive. An
+  /// invalid [carrier] or [packageId] throws a [BalikobotException] with
+  /// [BalikobotError.invalidRequest] before the client sends any request.
+  /// [timeout] overrides the configured request timeout for both calls.
+  Future<Uint8List> downloadLabelPdf(
+    Carrier carrier,
+    String packageId, {
+    Duration? timeout,
+  }) async {
+    final labelUrl = await labels(carrier, packageId, timeout: timeout);
+    final (bytes, mediaType) = await downloadLabel(labelUrl, timeout: timeout);
+    if (mediaType != 'application/pdf') {
+      throw _error(BalikobotError.invalidResponse);
+    }
+    return bytes;
+  }
+
   /// Downloads fresh labels of one or more packages that have not entered
   /// ORDER yet in one step.
   ///
@@ -668,6 +690,34 @@ class BalikobotClient {
         throw _error(BalikobotError.rejected);
       default:
         throw _error(BalikobotError.invalidResponse);
+    }
+  }
+
+  /// Polls [trackStatus] and emits each new carrier status.
+  ///
+  /// The stream emits the first result, then only results whose status id
+  /// changed. It ends when [stopWhen] returns true, when a poll fails with a
+  /// [BalikobotException], or when the subscription is cancelled. A cancelled
+  /// subscription lets a pending [interval] wait finish before the stream
+  /// closes. [timeout] overrides the configured request timeout for each poll.
+  Stream<TrackStatusResult> trackStatusStream(
+    Carrier carrier,
+    String carrierId, {
+    Duration interval = const Duration(minutes: 15),
+    bool Function(TrackStatusResult result)? stopWhen,
+    Duration? timeout,
+  }) async* {
+    String? lastStatusId;
+    while (true) {
+      final result = await trackStatus(carrier, carrierId, timeout: timeout);
+      if (result.statusId != lastStatusId) {
+        lastStatusId = result.statusId;
+        yield result;
+      }
+      if (stopWhen?.call(result) ?? false) {
+        return;
+      }
+      await Future<void>.delayed(interval);
     }
   }
 

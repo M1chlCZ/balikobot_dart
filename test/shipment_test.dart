@@ -401,6 +401,66 @@ void main() {
     });
   });
 
+  group('downloadLabelPdf', () {
+    test('downloads a PDF label for one package', () async {
+      final pdf = utf8.encode('%PDF-1.4 fake label');
+      var requests = 0;
+      final client = buildClient(
+        MockClient((request) async {
+          requests++;
+          if (request.method == 'POST' && request.url.path == '/ppl/labels') {
+            return jsonResponse({
+              'status': 200,
+              'labels_url': 'https://pdf.balikobot.cz/label.pdf',
+            });
+          }
+          expect(request.url.toString(), 'https://pdf.balikobot.cz/label.pdf');
+          return http.Response.bytes(
+            pdf,
+            200,
+            headers: {'content-type': 'application/pdf'},
+          );
+        }),
+      );
+      addTearDown(client.close);
+
+      final bytes = await client.downloadLabelPdf(Carrier.ppl, 'PKG-1');
+
+      expect(bytes, pdf);
+      expect(requests, 2);
+    });
+
+    test('rejects a label that is not a PDF', () async {
+      final client = buildClient(
+        MockClient((request) async {
+          if (request.method == 'POST') {
+            return jsonResponse({
+              'status': 200,
+              'labels_url': 'https://pdf.balikobot.cz/label.pdf',
+            });
+          }
+          return http.Response.bytes(
+            utf8.encode('^XA fake zpl'),
+            200,
+            headers: {'content-type': 'application/zpl'},
+          );
+        }),
+      );
+      addTearDown(client.close);
+
+      await expectLater(
+        client.downloadLabelPdf(Carrier.ppl, 'PKG-1'),
+        throwsA(
+          isA<BalikobotException>().having(
+            (error) => error.code,
+            'code',
+            BalikobotError.invalidResponse,
+          ),
+        ),
+      );
+    });
+  });
+
   group('downloadBatchLabels', () {
     test('returns a single PDF label', () async {
       final pdf = utf8.encode('%PDF-1.4 single label');
