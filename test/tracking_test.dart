@@ -234,5 +234,35 @@ void main() {
         ),
       );
     });
+
+    test('stops polling after the subscription is cancelled', () async {
+      var calls = 0;
+      final client = buildClient(
+        MockClient((request) async {
+          calls++;
+          return jsonResponse({
+            'status': 200,
+            'packages': [
+              {'carrier_id': 'TRACK-1', 'status_id': 1, 'name': 'Přijato'},
+            ],
+          });
+        }),
+      );
+      addTearDown(client.close);
+
+      final subscription = client
+          .trackStatusStream(
+            Carrier.ppl,
+            'TRACK-1',
+            interval: const Duration(milliseconds: 30),
+          )
+          .listen((_) {});
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+      await subscription.cancel();
+      final callsAtCancel = calls;
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+
+      expect(calls, callsAtCancel);
+    });
   });
 }

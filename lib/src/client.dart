@@ -698,27 +698,60 @@ class BalikobotClient {
   /// The stream emits the first result, then only results whose status id
   /// changed. It ends when [stopWhen] returns true, when a poll fails with a
   /// [BalikobotException], or when the subscription is cancelled. A cancelled
-  /// subscription lets a pending [interval] wait finish before the stream
-  /// closes. [timeout] overrides the configured request timeout for each poll.
+  /// subscription stops the polling loop; a poll that is already in flight
+  /// finishes, but its result is dropped. [timeout] overrides the configured
+  /// request timeout for each poll.
   Stream<TrackStatusResult> trackStatusStream(
     Carrier carrier,
     String carrierId, {
     Duration interval = const Duration(minutes: 15),
     bool Function(TrackStatusResult result)? stopWhen,
     Duration? timeout,
-  }) async* {
+  }) {
+    late final StreamController<TrackStatusResult> controller;
+    Timer? timer;
+    var cancelled = false;
+    var finished = false;
     String? lastStatusId;
-    while (true) {
-      final result = await trackStatus(carrier, carrierId, timeout: timeout);
-      if (result.statusId != lastStatusId) {
-        lastStatusId = result.statusId;
-        yield result;
-      }
-      if (stopWhen?.call(result) ?? false) {
+
+    Future<void> poll() async {
+      if (cancelled || finished) {
         return;
       }
-      await Future<void>.delayed(interval);
+      try {
+        final result = await trackStatus(carrier, carrierId, timeout: timeout);
+        if (cancelled) {
+          return;
+        }
+        if (result.statusId != lastStatusId) {
+          lastStatusId = result.statusId;
+          controller.add(result);
+        }
+        if (stopWhen?.call(result) ?? false) {
+          finished = true;
+          await controller.close();
+          return;
+        }
+      } catch (error, stackTrace) {
+        if (cancelled) {
+          return;
+        }
+        finished = true;
+        controller.addError(error, stackTrace);
+        await controller.close();
+        return;
+      }
+      timer = Timer(interval, poll);
     }
+
+    controller = StreamController<TrackStatusResult>(
+      onListen: poll,
+      onCancel: () {
+        cancelled = true;
+        timer?.cancel();
+      },
+    );
+    return controller.stream;
   }
 
   /// Calls the ORDER method, which hands one package over to the carrier
