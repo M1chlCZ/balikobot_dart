@@ -7,7 +7,7 @@ class Config {
   /// [user] and [apiKey] are required. The client sends them as the HTTP
   /// Basic credentials. [baseUrl] defaults to the production Balíkobot API v2
   /// endpoint. [timeout] defaults to 30 seconds and [maxResponseBytes] to
-  /// 8 MiB.
+  /// 8 MiB. [capabilityCacheTtl] defaults to ten minutes.
   const Config({
     this.baseUrl = 'https://apiv2.balikobot.cz',
     required this.user,
@@ -17,6 +17,7 @@ class Config {
     this.maxResponseBytes = 8 << 20,
     this.labelHosts = const [],
     this.liveAccount,
+    this.capabilityCacheTtl = const Duration(minutes: 10),
   });
 
   /// The API root, for example `https://apiv2.balikobot.cz`.
@@ -56,4 +57,9 @@ class Config {
   /// When set, the client requires the provider `live_account` flag to equal
   /// this value. When `null`, the client performs no account-mode check.
   final bool? liveAccount;
+
+  /// How long a carrier capability result stays cached.
+  ///
+  /// `Duration.zero` disables the cache. Negative values are rejected.
+  final Duration capabilityCacheTtl;
 }

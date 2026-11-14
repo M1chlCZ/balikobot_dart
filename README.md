@@ -219,6 +219,23 @@ mismatch blocks the write before the client sends it. A successful result stays
 valid for five minutes. If `Config.liveAccount` is null, the client skips the
 check.
 
+## Carrier capability cache
+
+`carrierCapabilities` caches its result for `Config.capabilityCacheTtl`, ten
+minutes by default. A repeated call for the same scope returns the cached
+list without a request. Pass `refresh: true` to discover again, and call
+`clearCapabilityCache()` to drop every cached scope:
+
+```dart
+final carriers = await client.carrierCapabilities();
+final fresh = await client.carrierCapabilities(refresh: true);
+client.clearCapabilityCache();
+```
+
+Set `capabilityCacheTtl: Duration.zero` to disable the cache. Concurrent calls
+for the same scope share one discovery run. A failed run is not cached, and
+clearing the cache does not cancel a run that is already in flight.
+
 ## Label hosts
 
 The client accepts label URLs only from `pdf.balikobot.cz` and the

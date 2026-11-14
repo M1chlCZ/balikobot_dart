@@ -6,8 +6,16 @@ import 'package:http/testing.dart';
 import 'package:test/test.dart';
 
 void main() {
-  BalikobotClient buildClient(MockClient httpClient) => BalikobotClient(
-    Config(user: 'user', apiKey: 'key', httpClient: httpClient),
+  BalikobotClient buildClient(
+    MockClient httpClient, {
+    Duration capabilityCacheTtl = const Duration(minutes: 10),
+  }) => BalikobotClient(
+    Config(
+      user: 'user',
+      apiKey: 'key',
+      httpClient: httpClient,
+      capabilityCacheTtl: capabilityCacheTtl,
+    ),
   );
 
   http.Response jsonResponse(Object body, {int status = 200}) => http.Response(
@@ -15,6 +23,37 @@ void main() {
     status,
     headers: {'content-type': 'application/json; charset=utf-8'},
   );
+
+  MockClient capabilityMock(void Function() onRequest) =>
+      MockClient((request) async {
+        onRequest();
+        return switch (request.url.path) {
+          '/info/whoami' => jsonResponse({
+            'status': 200,
+            'live_account': true,
+            'carriers': [
+              {'slug': 'ppl', 'name': 'PPL'},
+            ],
+          }),
+          '/ppl/activatedservices' => jsonResponse({
+            'status': 200,
+            'active_parcel': true,
+            'service_types': [
+              {'service_type': 'HOME', 'name': 'PPL Home'},
+            ],
+          }),
+          '/ppl/countries4service' => jsonResponse({
+            'status': 200,
+            'service_types': [
+              {
+                'service_type': 'HOME',
+                'countries': ['CZ'],
+              },
+            ],
+          }),
+          _ => throw StateError('unexpected request ${request.url.path}'),
+        };
+      });
 
   group('whoAmI', () {
     test('returns the account information', () async {
@@ -255,6 +294,53 @@ void main() {
       expect(service.homeDelivery, isTrue);
       expect(service.countries, {Country.cz: true, Country.de: true});
       expect(service.cod, isEmpty);
+    });
+  });
+
+  group('capability cache', () {
+    test('serves repeated capability calls from the cache', () async {
+      var requests = 0;
+      final client = buildClient(capabilityMock(() => requests++));
+      addTearDown(client.close);
+
+      final first = await client.carrierCapabilities();
+      final second = await client.carrierCapabilities();
+      expect(requests, 3);
+      expect(identical(first, second), isTrue);
+
+      await client.carrierCapabilities(refresh: true);
+      expect(requests, 6);
+
+      client.clearCapabilityCache();
+      await client.carrierCapabilities();
+      expect(requests, 9);
+    });
+
+    test('shares one discovery run between concurrent calls', () async {
+      var requests = 0;
+      final client = buildClient(capabilityMock(() => requests++));
+      addTearDown(client.close);
+
+      await Future.wait([
+        client.carrierCapabilities(),
+        client.carrierCapabilities(),
+      ]);
+
+      expect(requests, 3);
+    });
+
+    test('zero ttl disables the cache', () async {
+      var requests = 0;
+      final client = buildClient(
+        capabilityMock(() => requests++),
+        capabilityCacheTtl: Duration.zero,
+      );
+      addTearDown(client.close);
+
+      await client.carrierCapabilities();
+      await client.carrierCapabilities();
+
+      expect(requests, 6);
     });
   });
 }

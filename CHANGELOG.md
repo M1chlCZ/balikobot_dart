@@ -5,6 +5,9 @@
 - Added `trackStatusStream`: polls `trackStatus` and emits each changed
   status until `stopWhen` returns true, a poll fails, or the subscription is
   cancelled.
+- Cache `carrierCapabilities` results for `Config.capabilityCacheTtl`
+  (ten minutes by default, zero disables). Add `refresh` and
+  `clearCapabilityCache()`.
 
 ## [0.2.0] - 2026-10-13
 

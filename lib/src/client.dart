@@ -26,7 +26,8 @@ part 'webhook.dart';
 ///
 /// The client validates its [Config] on construction, authenticates every
 /// request with HTTP Basic credentials, and refuses redirects. It performs no
-/// logging, caching, persistence or automatic retries.
+/// logging, persistence or automatic retries; only carrier capability
+/// discovery is cached.
 class BalikobotClient {
   /// Validates [config] and creates a client.
   ///
@@ -45,6 +46,9 @@ class BalikobotClient {
     if (config.timeout.isNegative) {
       throw ArgumentError(_timeoutMessage);
     }
+    if (config.capabilityCacheTtl.isNegative) {
+      throw ArgumentError(_capabilityCacheTtlMessage);
+    }
     if (config.maxResponseBytes < 0 ||
         config.maxResponseBytes > _maxResponseBytesLimit) {
       throw ArgumentError(_responseLimitMessage);
@@ -58,6 +62,7 @@ class BalikobotClient {
         ? _defaultTimeout
         : config.timeout;
     _timeout = timeout;
+    _capabilityCacheTtl = config.capabilityCacheTtl;
     _ownsHttpClient = config.httpClient == null;
     _maxResponseBytes = config.maxResponseBytes == 0
         ? _defaultMaxResponseBytes
@@ -84,6 +89,10 @@ class BalikobotClient {
   late final JsonRestClient _rest;
   late final int _maxResponseBytes;
   late final Duration _timeout;
+  late final Duration _capabilityCacheTtl;
+  final Map<String, _CapabilityCacheEntry> _capabilityCache = {};
+  final Map<String, Future<List<capabilities.ContractedCarrier>>>
+  _capabilityInFlight = {};
   late final List<String> _labelHosts;
   late final String _origin;
   late final bool _loopback;
@@ -1140,7 +1149,60 @@ class BalikobotClient {
   /// [BalikobotError.invalidResponse]. The call restricts the returned
   /// destinations to EU countries, matching the reference integration.
   /// [timeout] overrides the configured request timeout for this call.
+  ///
+  /// Results are cached for [Config.capabilityCacheTtl]. Pass `refresh: true`
+  /// to bypass the cache, or call [clearCapabilityCache] to drop every entry.
+  /// Concurrent calls for the same [scope] share one discovery run.
   Future<List<capabilities.ContractedCarrier>> carrierCapabilities({
+    List<Carrier>? scope,
+    Duration? timeout,
+    bool refresh = false,
+  }) {
+    final key = _capabilityCacheKey(scope);
+    if (_capabilityCacheTtl == Duration.zero) {
+      return _loadCarrierCapabilities(scope: scope, timeout: timeout);
+    }
+    if (!refresh) {
+      final cached = _capabilityCache[key];
+      if (cached != null &&
+          DateTime.now().difference(cached.createdAt) < _capabilityCacheTtl) {
+        return Future.value(cached.carriers);
+      }
+    }
+    final inFlight = _capabilityInFlight[key];
+    if (inFlight != null) {
+      return inFlight;
+    }
+    final load = _loadCarrierCapabilities(scope: scope, timeout: timeout)
+        .then((carriers) {
+          final result = List<capabilities.ContractedCarrier>.unmodifiable(
+            carriers,
+          );
+          _capabilityCache[key] = _CapabilityCacheEntry(result, DateTime.now());
+          return result;
+        })
+        .whenComplete(() {
+          _capabilityInFlight.remove(key);
+        });
+    _capabilityInFlight[key] = load;
+    return load;
+  }
+
+  /// Drops every cached carrier capability result.
+  void clearCapabilityCache() {
+    _capabilityCache.clear();
+  }
+
+  String _capabilityCacheKey(List<Carrier>? scope) {
+    if (scope == null || scope.isEmpty) {
+      return '*';
+    }
+    final values = scope.map((carrier) => carrier.value).toSet().toList()
+      ..sort();
+    return values.join(',');
+  }
+
+  Future<List<capabilities.ContractedCarrier>> _loadCarrierCapabilities({
     List<Carrier>? scope,
     Duration? timeout,
   }) async {
@@ -1402,6 +1464,13 @@ class _EmptyTokenStore implements TokenStore {
   Future<String?> read(String key) async => null;
 }
 
+class _CapabilityCacheEntry {
+  const _CapabilityCacheEntry(this.carriers, this.createdAt);
+
+  final List<capabilities.ContractedCarrier> carriers;
+  final DateTime createdAt;
+}
+
 const String _defaultBaseUrl = 'https://apiv2.balikobot.cz';
 const Duration _defaultTimeout = Duration(seconds: 30);
 const Duration _accountModeTtl = Duration(minutes: 5);
@@ -1416,6 +1485,8 @@ const String _apiKeyMessage =
     'invalid configuration: API key is required and limited to 4096 bytes';
 const String _timeoutMessage =
     'invalid configuration: timeout must not be negative';
+const String _capabilityCacheTtlMessage =
+    'invalid configuration: capabilityCacheTtl must not be negative';
 const String _responseLimitMessage =
     'invalid configuration: response limit must be between 0 and 1073741824 bytes';
 const String _baseUrlAbsoluteMessage =
