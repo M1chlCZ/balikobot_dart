@@ -1,3 +1,11 @@
+## [0.3.0] - 2026-11-14
+
+- Added `downloadLabelPdf`: looks up and downloads one label and requires a
+  PDF body. Other media types throw `BalikobotError.invalidResponse`.
+- Added `trackStatusStream`: polls `trackStatus` and emits each changed
+  status until `stopWhen` returns true, a poll fails, or the subscription is
+  cancelled.
+
 ## [0.2.0] - 2026-10-13
 
 - Added `downloadBatchLabels`: requests and downloads the labels of one to

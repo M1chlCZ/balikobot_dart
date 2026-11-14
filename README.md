@@ -75,9 +75,11 @@ The `example/main.dart` file holds the same code.
 | `labels` | `POST /{carrier}/labels` | Gets a fresh label URL for one package |
 | `orderViewLabels` | `GET /{carrier}/orderview/{order_id}` | Gets the label URL of a closed order |
 | `downloadLabel` | `GET` the label URL | Downloads the label body |
+| `downloadLabelPdf` | `POST /{carrier}/labels` and label download | Downloads one label and requires a PDF body |
 | `downloadBatchLabels` | `POST /{carrier}/labels` and label download | Downloads the labels of one to 1000 packages |
 | `parseTrackingNotifications` | none | Parses the raw body of a tracking webhook |
 | `trackStatus` | `POST /{carrier}/trackstatus` | Reads the tracking status of one package |
+| `trackStatusStream` | `POST /{carrier}/trackstatus` polls | Emits changed tracking statuses until stopped |
 | `orderBatch` | `POST /{carrier}/order` | Hands one package to the carrier batch |
 | `dropPackage` | `POST /{carrier}/drop` | Removes one package before ORDER |
 | `orderPickup` | `POST /{carrier}/orderpickup` | Books one physical collection |
@@ -150,6 +152,20 @@ capability calls return `unavailable` without a hint.
 
 The client sends no automatic retry. You control the retry policy.
 
+## Labels
+
+`downloadLabelPdf` combines the label lookup and the download and requires a
+PDF body:
+
+```dart
+final pdf = await client.downloadLabelPdf(Carrier.ppl, packageId);
+File('label.pdf').writeAsBytesSync(pdf);
+```
+
+Other media types, such as ZPL, throw a `BalikobotException` with
+`BalikobotError.invalidResponse`. Use `labels` and `downloadLabel` when you
+need the media type.
+
 ## Tracking webhooks
 
 `parseTrackingNotifications` parses the raw JSON body of a Balíkobot tracking
@@ -166,6 +182,25 @@ for (final notification in notifications) {
   print('${notification.statusId}: ${notification.statusText}');
 }
 ```
+
+### Polling tracking status
+
+`trackStatusStream` polls `trackStatus` and emits the first result and every
+change of the status id. The stream stops when `stopWhen` returns true:
+
+```dart
+await for (final status in client.trackStatusStream(
+  Carrier.ppl,
+  carrierId,
+  interval: const Duration(minutes: 15),
+  stopWhen: (status) => status.statusId == '1.2',
+)) {
+  print('${status.statusId}: ${status.statusText}');
+}
+```
+
+The stream ends with the error when a poll fails. A cancelled subscription
+lets a pending interval finish before the stream closes.
 
 ## Response limits
 
