@@ -159,6 +159,104 @@ void main() {
         ),
       );
     });
+
+    test('reports a carrier outage as ambiguous', () async {
+      for (final (httpStatus, body) in [
+        (
+          400,
+          <String, Object?>{
+            'status': 400,
+            'packages': [
+              {
+                'eid': '018f00000000400080000000000000aa-S1',
+                'status': 400,
+                'errors': [
+                  {'attribute': 'carrier_error'},
+                ],
+                'package_id': null,
+              },
+            ],
+          },
+        ),
+        (
+          200,
+          <String, Object?>{
+            'status': 400,
+            'packages': [
+              {
+                'eid': '018f00000000400080000000000000aa-S1',
+                'status': '400',
+                'errors': [
+                  {'attribute': 'carrier_error'},
+                ],
+              },
+            ],
+          },
+        ),
+        (
+          503,
+          <String, Object?>{
+            'status': 503,
+            'packages': [
+              {
+                'eid': '018f00000000400080000000000000aa-S1',
+                'status': 503,
+                'errors': [
+                  {'attribute': 'carrier_error'},
+                ],
+              },
+            ],
+          },
+        ),
+      ]) {
+        final client = buildClient(
+          MockClient((request) async => jsonResponse(body, status: httpStatus)),
+        );
+        addTearDown(client.close);
+
+        await expectLater(
+          client.addPackage(Carrier.ppl, addRequest()),
+          throwsA(
+            isA<BalikobotCarrierOutageException>().having(
+              (error) => error.code,
+              'code',
+              BalikobotError.ambiguous,
+            ),
+          ),
+        );
+      }
+    });
+
+    test('keeps the HTTP error for another eid', () async {
+      final client = buildClient(
+        MockClient(
+          (request) async => jsonResponse({
+            'status': 400,
+            'packages': [
+              {
+                'eid': 'OTHER',
+                'status': 400,
+                'errors': [
+                  {'attribute': 'carrier_error'},
+                ],
+              },
+            ],
+          }, status: 400),
+        ),
+      );
+      addTearDown(client.close);
+
+      await expectLater(
+        client.addPackage(Carrier.ppl, addRequest()),
+        throwsA(
+          isA<BalikobotException>().having(
+            (error) => error.code,
+            'code',
+            BalikobotError.rejected,
+          ),
+        ),
+      );
+    });
   });
 
   group('overview', () {
@@ -255,6 +353,43 @@ void main() {
           ),
         ),
       );
+    });
+
+    test('requires an explicit package list', () async {
+      for (final body in [
+        <String, Object?>{},
+        {'status': 200},
+        {'status': '208', 'packages': null},
+      ]) {
+        final client = buildClient(
+          MockClient((request) async => jsonResponse(body)),
+        );
+        addTearDown(client.close);
+
+        await expectLater(
+          client.overview(Carrier.ppl, 'eid-1'),
+          throwsA(
+            isA<BalikobotException>().having(
+              (error) => error.code,
+              'code',
+              BalikobotError.invalidResponse,
+            ),
+          ),
+        );
+      }
+    });
+
+    test('accepts an explicit empty package list', () async {
+      final client = buildClient(
+        MockClient(
+          (request) async => jsonResponse({'status': 200, 'packages': []}),
+        ),
+      );
+      addTearDown(client.close);
+
+      final packages = await client.overview(Carrier.ppl, 'eid-1');
+
+      expect(packages, isEmpty);
     });
   });
 

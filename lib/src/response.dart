@@ -324,9 +324,14 @@ class _OverviewPackageStatus {
 }
 
 class _OverviewResponse {
-  const _OverviewResponse({required this.status, required this.packages});
+  const _OverviewResponse({
+    required this.status,
+    required this.hasPackages,
+    required this.packages,
+  });
 
   final int? status;
+  final bool hasPackages;
   final List<_OverviewPackageStatus> packages;
 }
 
@@ -442,6 +447,7 @@ _OverviewResponse _overviewResponse(Object? raw) {
   }
   return _OverviewResponse(
     status: _wireStatus(raw),
+    hasPackages: raw.containsKey('packages') && raw['packages'] != null,
     packages: _overviewPackageStatuses(raw['packages']),
   );
 }

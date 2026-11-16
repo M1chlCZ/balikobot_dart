@@ -133,6 +133,11 @@ holds one of six `BalikobotError` values.
 | `BalikobotError.ambiguous` | A mutating call can have reached the provider. | Reconcile with `overview`. Then retry. |
 | `BalikobotError.invalidResponse` | The answer violates the protocol. | Inspect the provider. Do not retry blindly. |
 
+`addPackage` reports a carrier `carrier_error` as a
+`BalikobotCarrierOutageException`. It is a subclass of `BalikobotException`
+with the `ambiguous` code, because the carrier may have accepted the package.
+Reconcile with `overview` before another attempt.
+
 When a 429 response carries a `Retry-After` header, an `unavailable` failure
 carries the `retryAfter` field on `BalikobotException`. Read the field and wait
 before the next call:

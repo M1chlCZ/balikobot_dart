@@ -43,3 +43,18 @@ class BalikobotException implements Exception {
   @override
   String toString() => 'BalikobotException(${code.name}): $message';
 }
+
+/// Reports an `ADD` failure in which the carrier rejected the package with a
+/// `carrier_error`.
+///
+/// The carrier may have accepted the package anyway, so the code is
+/// [BalikobotError.ambiguous]. Reconcile with
+/// [BalikobotClient.overview] before another attempt.
+class BalikobotCarrierOutageException extends BalikobotException {
+  /// Creates the exception.
+  const BalikobotCarrierOutageException()
+    : super(
+        BalikobotError.ambiguous,
+        'balikobot: carrier reported an error during ADD',
+      );
+}

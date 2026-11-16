@@ -220,24 +220,46 @@ class BalikobotClient {
       throw _error(BalikobotError.ambiguous);
     }
     final statusCode = response.statusCode;
+    final json = _isJson(response);
+    final BalikobotException? statusError;
     if (statusCode == 429) {
-      throw _transient(response);
+      statusError = _transient(response);
+    } else if (statusCode >= 500) {
+      statusError = _error(BalikobotError.unavailable);
+    } else if (statusCode != 200) {
+      statusError = statusCode >= 200 && statusCode < 300
+          ? _error(BalikobotError.ambiguous)
+          : statusCode >= 400 && statusCode < 500
+          ? _error(BalikobotError.rejected)
+          : _error(BalikobotError.invalidResponse);
+    } else if (!json) {
+      statusError = _error(BalikobotError.ambiguous);
+    } else {
+      statusError = null;
     }
-    if (statusCode >= 500) {
-      throw _error(BalikobotError.unavailable);
-    }
-    if (statusCode != 200) {
-      if (statusCode >= 200 && statusCode < 300) {
-        throw _error(BalikobotError.ambiguous);
+    if (statusError != null) {
+      if (statusCode < 400 || statusCode >= 600 || !json) {
+        throw statusError;
       }
-      if (statusCode >= 400 && statusCode < 500) {
-        throw _error(BalikobotError.rejected);
+      if (_addCarrierOutage(response, request.eid)) {
+        throw const BalikobotCarrierOutageException();
       }
-      throw _error(BalikobotError.invalidResponse);
+      throw statusError;
     }
-    if (!_isJson(response)) {
-      throw _error(BalikobotError.ambiguous);
+    try {
+      return _decodeAddPackage(response, request.eid);
+    } on BalikobotException {
+      if (_addCarrierOutage(response, request.eid)) {
+        throw const BalikobotCarrierOutageException();
+      }
+      rethrow;
     }
+  }
+
+  AddPackageResult _decodeAddPackage(
+    RestResponse response,
+    String expectedEid,
+  ) {
     final _AddResponse payload;
     try {
       payload = _addResponse(_decode(response));
@@ -255,7 +277,7 @@ class BalikobotClient {
       throw statusError;
     }
     if (payload.packages.length != 1 ||
-        payload.packages.first.eid != request.eid) {
+        payload.packages.first.eid != expectedEid) {
       throw _error(BalikobotError.ambiguous);
     }
     final entry = payload.packages.first;
@@ -289,6 +311,49 @@ class BalikobotClient {
       default:
         throw _error(BalikobotError.ambiguous);
     }
+  }
+
+  bool _addCarrierOutage(RestResponse response, String expectedEid) {
+    final Object? raw;
+    try {
+      raw = _decode(response);
+    } on FormatException {
+      return false;
+    }
+    if (raw is! Map<String, dynamic>) {
+      return false;
+    }
+    final packages = raw['packages'];
+    if (packages is! List || packages.length != 1) {
+      return false;
+    }
+    final entry = packages.first;
+    if (entry is! Map<String, dynamic>) {
+      return false;
+    }
+    final int? status;
+    try {
+      status = _wireStatus(entry);
+    } on FormatException {
+      return false;
+    }
+    if (entry['eid'] != expectedEid ||
+        status == null ||
+        status < 400 ||
+        status >= 600) {
+      return false;
+    }
+    final errors = entry['errors'];
+    if (errors is! List) {
+      return false;
+    }
+    for (final issue in errors) {
+      if (issue is Map<String, dynamic> &&
+          issue['attribute'] == 'carrier_error') {
+        return true;
+      }
+    }
+    return false;
   }
 
   /// Calls the OVERVIEW method, which lists the packages of a [carrier] that
@@ -342,6 +407,9 @@ class BalikobotClient {
     final statusError = _topLevelStatusError(payload.status);
     if (statusError != null) {
       throw statusError;
+    }
+    if (!payload.hasPackages) {
+      throw _error(BalikobotError.invalidResponse);
     }
     final packages = <OverviewPackage>[];
     for (final entry in payload.packages) {
