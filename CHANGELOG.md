@@ -1,3 +1,12 @@
+## [0.3.1] - 2026-11-16
+
+- `addPackage` reports a matching package's `carrier_error` as
+  `BalikobotCarrierOutageException`, including in HTTP error responses. Its
+  code is `BalikobotError.ambiguous`, so reconcile with `overview` before
+  another attempt.
+- `overview` requires an explicit package array. A missing or null array
+  throws `BalikobotError.invalidResponse` instead of returning an empty list.
+
 ## [0.3.0] - 2026-11-14
 
 - Added `downloadLabelPdf`: looks up and downloads one label and requires a
